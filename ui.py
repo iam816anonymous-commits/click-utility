@@ -72,10 +72,12 @@ class SaveTargetDialog(QDialog):
     """
     Modal window to name and configure the newly captured template target.
     """
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, abs_x: int = None, abs_y: int = None):
         super().__init__(parent)
         self.setWindowTitle("Save Macro Automation Rule")
-        self.resize(600, 650)
+        self.resize(600, 670)
+        self.abs_x = abs_x
+        self.abs_y = abs_y
         # Default with one single click step at the center (offset 0,0)
         self.click_steps = [{"action": "Single Click", "offset_x": 0, "offset_y": 0, "delay": 0.5}]
         self.init_ui()
@@ -85,14 +87,20 @@ class SaveTargetDialog(QDialog):
 
         # Target Name
         layout.addWidget(QLabel("<b>Target / Rule Name:</b>"))
-        self.name_input = QLineEdit("My Macro Button")
+        self.name_input = QLineEdit("My Macro Button" if self.abs_x is None else f"Click at [{self.abs_x}, {self.abs_y}]")
         layout.addWidget(self.name_input)
 
         # Trigger Type
         layout.addWidget(QLabel("<b>Trigger Mechanism:</b>"))
         self.trigger_combo = QComboBox()
-        self.trigger_combo.addItems(["Image Template Match", "OCR Text Match"])
+        self.trigger_combo.addItems(["Image Template Match", "OCR Text Match", "Absolute Cursor Position"])
         layout.addWidget(self.trigger_combo)
+
+        if self.abs_x is not None and self.abs_y is not None:
+            self.trigger_combo.setCurrentText("Absolute Cursor Position")
+            coords_lbl = QLabel(f"<font color='#059669'>🎯 Captured Cursor Coordinates: <b>X: {self.abs_x}, Y: {self.abs_y}</b></font>")
+            coords_lbl.setStyleSheet("padding: 4px; background-color: #ECFDF5; border: 1px solid #A7F3D0; border-radius: 4px;")
+            layout.addWidget(coords_lbl)
 
         # Cooldown Slider
         layout.addWidget(QLabel("<b>Rule Cooldown Delay (Seconds):</b>"))
@@ -241,9 +249,11 @@ class NativeDashboard(QMainWindow):
         self.start_btn = QPushButton("▶ Start Monitor (F8)")
         self.stop_btn = QPushButton("⏸ Stop Monitor (F9)")
         self.teach_btn = QPushButton("🎯 Teach Button (F10)")
+        self.teach_cursor_btn = QPushButton("📍 Teach Cursor (F11)")
         ctrl_layout.addWidget(self.start_btn)
         ctrl_layout.addWidget(self.stop_btn)
         ctrl_layout.addWidget(self.teach_btn)
+        ctrl_layout.addWidget(self.teach_cursor_btn)
         left_layout.addWidget(ctrl_group)
 
         # Active Rules Table
@@ -276,6 +286,7 @@ class NativeDashboard(QMainWindow):
             "🟢 <b>F8</b>: Start capture loop<br>"
             "🔴 <b>F9</b>: Stop capture loop<br>"
             "🎯 <b>F10</b>: Teach new image target<br>"
+            "📍 <b>F11</b>: Teach current cursor position<br>"
             "🚨 <b>Esc</b>: Panic emergency abort"
         )
         right_layout.addWidget(info_label)

@@ -15,6 +15,7 @@ class ClickEngine(QObject):
     start_signal = Signal()
     stop_signal = Signal()
     teach_signal = Signal()
+    teach_cursor_signal = Signal()
     emergency_signal = Signal()
 
     def __init__(self):
@@ -54,6 +55,8 @@ class ClickEngine(QObject):
                     self.stop_signal.emit()
                 elif key == keyboard.Key.f10:
                     self.teach_signal.emit()
+                elif key == keyboard.Key.f11:
+                    self.teach_cursor_signal.emit()
                 elif key == keyboard.Key.esc:
                     self.emergency_signal.emit()
             except Exception as e:

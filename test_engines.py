@@ -92,5 +92,28 @@ class TestMatchEngine(unittest.TestCase):
         self.assertEqual(rule.click_steps[2]["offset_y"], 0)
         self.assertEqual(rule.click_steps[2]["delay"], 0.5)
 
+    def test_absolute_cursor_position_rule(self):
+        # Import MacroRule model
+        from main import MacroRule
+
+        rule = MacroRule(
+            id_str="rule_abs_test",
+            name="Test Absolute Position",
+            trigger_type="Absolute Cursor Position",
+            action="Single Click",
+            cooldown=3.0,
+            threshold=1.0,
+            template_path="",
+            click_steps=[{"action": "Single Click", "offset_x": 0, "offset_y": 0, "delay": 0.5}],
+            abs_x=1200,
+            abs_y=800
+        )
+
+        # Verify absolute coordinates are stored correctly
+        self.assertEqual(rule.trigger_type, "Absolute Cursor Position")
+        self.assertEqual(rule.abs_x, 1200)
+        self.assertEqual(rule.abs_y, 800)
+        self.assertEqual(len(rule.click_steps), 1)
+
 if __name__ == "__main__":
     unittest.main()

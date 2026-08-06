@@ -16,7 +16,7 @@ class MacroRule:
     """
     Data model representing a visual macro click rule.
     """
-    def __init__(self, id_str: str, name: str, trigger_type: str, action: str, cooldown: float, threshold: float, template_path: str, click_steps: list = None):
+    def __init__(self, id_str: str, name: str, trigger_type: str, action: str, cooldown: float, threshold: float, template_path: str, click_steps: list = None, abs_x: int = None, abs_y: int = None):
         self.id_str = id_str
         self.name = name
         self.trigger_type = trigger_type
@@ -24,6 +24,8 @@ class MacroRule:
         self.cooldown = cooldown
         self.threshold = threshold
         self.template_path = template_path
+        self.abs_x = abs_x
+        self.abs_y = abs_y
         self.active = True
         self.last_triggered = 0.0
         # If no click steps specified, default to a single step at the center (offset 0,0)
@@ -152,6 +154,34 @@ class MonitoringWorker(QThread):
                                 time.sleep(step_delay)
                             break # execute one match per cycle
 
+                    # Absolute Cursor Position matching
+                    elif rule.trigger_type == "Absolute Cursor Position":
+                        if rule.abs_x is not None and rule.abs_y is not None:
+                            # Bypasses screen matching/scanning and triggers the steps directly!
+                            with self.lock:
+                                rule.last_triggered = now
+
+                            self.log_signal.emit(
+                                f"[+] Absolute Trigger Success: '{rule.name}' at [{rule.abs_x}, {rule.abs_y}]. Executing click steps..."
+                            )
+
+                            # Process each step in sequence relative to the absolute coordinates
+                            for i, step in enumerate(rule.click_steps):
+                                step_action = step["action"]
+                                step_x = rule.abs_x + step["offset_x"]
+                                step_y = rule.abs_y + step["offset_y"]
+                                step_delay = step["delay"]
+
+                                self.log_signal.emit(
+                                    f"  -> Step #{i+1}: Clicking '{step_action}' at [{step_x}, {step_y}] "
+                                    f"(offset: {step['offset_x']},{step['offset_y']}). Delay: {step_delay}s"
+                                )
+
+                                self.click_signal.emit(step_x, step_y, step_action)
+                                # Sleep after this step
+                                time.sleep(step_delay)
+                            break # execute one match per cycle
+
                 # Delay between scans (e.g. scanning ~10 times per second)
                 time.sleep(0.1)
 
@@ -195,6 +225,7 @@ class ApplicationCoordinator(QObject):
         self.dashboard.start_btn.clicked.connect(self.start_monitoring)
         self.dashboard.stop_btn.clicked.connect(self.stop_monitoring)
         self.dashboard.teach_btn.clicked.connect(self.trigger_teach)
+        self.dashboard.teach_cursor_btn.clicked.connect(self.trigger_teach_cursor)
         self.dashboard.clear_logs_btn.clicked.connect(self.dashboard.log_output.clear)
 
         # Teach overlay capture triggers
@@ -208,12 +239,13 @@ class ApplicationCoordinator(QObject):
         self.click_engine.start_signal.connect(self.start_monitoring)
         self.click_engine.stop_signal.connect(self.stop_monitoring)
         self.click_engine.teach_signal.connect(self.trigger_teach)
+        self.click_engine.teach_cursor_signal.connect(self.trigger_teach_cursor)
         self.click_engine.emergency_signal.connect(self.emergency_abort)
 
     def start_hotkeys(self):
         # Start global keyboard hotkeys in separate thread
         self.click_engine.start_hotkeys_listener()
-        self.dashboard.append_log("[*] Global Hotkey Listener started: F8 (Start), F9 (Stop), F10 (Teach), ESC (Abort)")
+        self.dashboard.append_log("[*] Global Hotkey Listener started: F8 (Start), F9 (Stop), F10 (Teach), F11 (Teach Cursor), ESC (Abort)")
 
     @Slot()
     def start_monitoring(self):
@@ -232,6 +264,50 @@ class ApplicationCoordinator(QObject):
     def trigger_teach(self):
         self.dashboard.append_log("[*] Initializing crosshair teaching overlay. Draw bounding box over target button.")
         self.teach_overlay.show_overlay()
+
+    @Slot()
+    def trigger_teach_cursor(self):
+        import pyautogui
+        mx, my = pyautogui.position()
+        self.dashboard.append_log(f"[*] Capturing current cursor coordinates: [{mx}, {my}].")
+
+        # Pop save dialog pre-populated with cursor coordinates
+        dialog = SaveTargetDialog(self.dashboard, abs_x=mx, abs_y=my)
+        if dialog.exec() == QDialog.Accepted:
+            name = dialog.name_input.text()
+            trigger_type = dialog.trigger_combo.currentText()
+            cooldown = float(dialog.cooldown_combo.currentText())
+            threshold = float(dialog.conf_slider.value()) / 100.0
+
+            click_steps = dialog.click_steps
+            if len(click_steps) == 1:
+                action = click_steps[0]["action"]
+            else:
+                action = f"Sequence ({len(click_steps)} steps)"
+
+            rule_id = f"rule_{int(time.time())}"
+            filepath = ""
+
+            try:
+                new_rule = MacroRule(
+                    id_str=rule_id,
+                    name=name,
+                    trigger_type=trigger_type,
+                    action=action,
+                    cooldown=cooldown,
+                    threshold=threshold,
+                    template_path=filepath,
+                    click_steps=click_steps,
+                    abs_x=mx,
+                    abs_y=my
+                )
+                with self.lock:
+                    self.rules.append(new_rule)
+
+                self.refresh_rules_table()
+                self.dashboard.append_log(f"[✓] Saved new absolute cursor position rule: '{name}' targeting [{mx}, {my}]")
+            except Exception as e:
+                self.dashboard.append_log(f"[!] Failed to save rule: {e}")
 
     @Slot(int, int, int, int)
     def handle_region_selected(self, x: int, y: int, w: int, h: int):
