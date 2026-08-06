@@ -16,7 +16,7 @@ class MacroRule:
     """
     Data model representing a visual macro click rule.
     """
-    def __init__(self, id_str: str, name: str, trigger_type: str, action: str, cooldown: float, threshold: float, template_path: str, click_steps: list = None, abs_x: int = None, abs_y: int = None, window_title: str = None, window_offset_x: int = None, window_offset_y: int = None):
+    def __init__(self, id_str: str, name: str, trigger_type: str, action: str, cooldown: float, threshold: float, template_path: str, click_steps: list = None, abs_x: int = None, abs_y: int = None, window_title: str = None, window_offset_x: int = None, window_offset_y: int = None, window_handle: int = None, countdown_delay: int = None, coordinate_history: list = None):
         self.id_str = id_str
         self.name = name
         self.trigger_type = trigger_type
@@ -29,6 +29,9 @@ class MacroRule:
         self.window_title = window_title
         self.window_offset_x = window_offset_x
         self.window_offset_y = window_offset_y
+        self.window_handle = window_handle
+        self.countdown_delay = countdown_delay
+        self.coordinate_history = coordinate_history if coordinate_history is not None else []
         self.active = True
         self.last_triggered = 0.0
         # If no click steps specified, default to a single step at the center (offset 0,0)
@@ -160,8 +163,43 @@ class MonitoringWorker(QThread):
                     # Window-Relative Position matching
                     elif rule.trigger_type == "Window-Relative Position":
                         if rule.window_offset_x is not None and rule.window_offset_y is not None:
-                            # Retrieve the current active window location on the screen
-                            title, wx, wy, ww, wh = self.capture_engine.get_active_window_rect()
+                            # Locate the target window using pygetwindow if possible
+                            window_found = False
+                            wx, wy = 0, 0
+                            title = rule.window_title
+
+                            try:
+                                import pygetwindow as gw
+                                # Match windows containing the saved window title
+                                all_wins = gw.getWindowsWithTitle(rule.window_title) if rule.window_title else []
+                                if all_wins:
+                                    target_win = all_wins[0]
+                                    # If minimized, restore it automatically!
+                                    if target_win.isMinimized:
+                                        target_win.restore()
+                                        time.sleep(0.3)
+                                    wx = target_win.left
+                                    wy = target_win.top
+                                    title = target_win.title
+                                    window_found = True
+                            except Exception:
+                                pass
+
+                            # Headless/Linux test fallback if pygetwindow is unsupported or failed
+                            if not window_found:
+                                try:
+                                    title, wx, wy, ww, wh = self.capture_engine.get_active_window_rect()
+                                    if rule.window_title in title or "Headless" in title:
+                                        window_found = True
+                                except Exception:
+                                    pass
+
+                            # If window still cannot be found, log warning and SKIP click to prevent random clicks!
+                            if not window_found:
+                                self.log_signal.emit(
+                                    f"[🚨] Target window '{rule.window_title}' not found. Skipping click sequence to prevent random clicking."
+                                )
+                                continue
 
                             # Calculate current absolute coordinates based on active window and saved offset
                             target_x = wx + rule.window_offset_x

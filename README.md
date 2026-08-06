@@ -82,7 +82,16 @@ The utility hooks into the keyboard at the kernel/OS level, enabling global hotk
 6. Slide the confidence threshold (default **90%** avoids false clicks like clicking a profile picture instead of a dashboard option).
 7. Configure the **Click Sequence Builder** below!
 
-### 3. Click Sequence Builder (Multiple Click Steps)
+### 3. Coordinate Capture System (Absolute & Window-Relative)
+When adding an absolute or window-relative position rule, you can use the **Coordinate Capture System**:
+* **Custom Delay**: Specify a capture delay (0s to 10s) with an active countdown display to let menus or flyouts appear first.
+* **Fullscreen Magnification Zoom Overlay**: Moves into full screen with a red crosshair and a magnifying loupe (just like Windows Snipping Tool) to let you target the exact pixel. Press ESC to cancel.
+* **Badges and Status Tracking**: Visual status badges (`🟢 Position Captured`, `🟡 Waiting for Capture`, `🔴 Capture Cancelled`) track state.
+* **Test Captured Position**: Click `🔍 Test Position` to automatically move your cursor to the captured spot, perform a highlighting tap click, and safely return the mouse cursor to where it was.
+* **Capture History Dropdown**: Reuse previous captures instantly using the "Recent Captures History" dropdown.
+* **Minimize-Protection**: Window-relative mode finds the target window, automatically restores it if minimized, and skips the click sequence safely if the window is missing to prevent random/errant clicks on your desktop.
+
+### 4. Click Sequence Builder (Multiple Click Steps)
 Instead of just clicking the matched target center once, you can configure complex multi-step click sequence macros:
 * **Add custom steps**: Click `➕ Add Click Step` after specifying:
   - **Action Type**: Single Click, Double Click, or Right Click.

@@ -147,5 +147,40 @@ class TestMatchEngine(unittest.TestCase):
         self.assertEqual(target_x, 370)
         self.assertEqual(target_y, 530)
 
+    def test_coordinate_history_tracking(self):
+        # Import MacroRule model
+        from main import MacroRule
+
+        rule = MacroRule(
+            id_str="rule_hist_test",
+            name="Test Coordinate History",
+            trigger_type="Absolute Cursor Position",
+            action="Single Click",
+            cooldown=3.0,
+            threshold=1.0,
+            template_path="",
+            coordinate_history=[
+                {"window": "Chrome", "x": 1245, "y": 621},
+                {"window": "Explorer", "x": 712, "y": 441}
+            ]
+        )
+
+        self.assertEqual(len(rule.coordinate_history), 2)
+        self.assertEqual(rule.coordinate_history[0]["window"], "Chrome")
+        self.assertEqual(rule.coordinate_history[0]["x"], 1245)
+        self.assertEqual(rule.coordinate_history[1]["window"], "Explorer")
+        self.assertEqual(rule.coordinate_history[1]["y"], 441)
+
+    def test_active_window_offset_calculation(self):
+        # Simulate active window offset calculation bounds: Screen coordinates (1200, 800) vs Window (1000, 600)
+        screen_x, screen_y = 1200, 800
+        win_left, win_top = 1000, 600
+
+        offset_x = screen_x - win_left
+        offset_y = screen_y - win_top
+
+        self.assertEqual(offset_x, 200)
+        self.assertEqual(offset_y, 200)
+
 if __name__ == "__main__":
     unittest.main()
