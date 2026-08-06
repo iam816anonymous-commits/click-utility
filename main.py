@@ -122,6 +122,36 @@ class MonitoringWorker(QThread):
                                         f"with {conf*100:.1f}% confidence. (Threshold is {rule.threshold*100:.1f}%)."
                                     )
 
+                    # OCR matching
+                    elif rule.trigger_type == "OCR Text Match":
+                        match = MatchEngine.match_text_ocr(screen, rule.name)
+                        if match:
+                            best_x, best_y, conf = match
+                            # Safely write the last triggered timestamp
+                            with self.lock:
+                                rule.last_triggered = now
+
+                            self.log_signal.emit(
+                                f"[+] OCR Match Success: Found text '{rule.name}' with {conf*100:.1f}% confidence. Executing click steps..."
+                            )
+
+                            # Process each step in sequence
+                            for i, step in enumerate(rule.click_steps):
+                                step_action = step["action"]
+                                step_x = best_x + step["offset_x"]
+                                step_y = best_y + step["offset_y"]
+                                step_delay = step["delay"]
+
+                                self.log_signal.emit(
+                                    f"  -> Step #{i+1}: Clicking '{step_action}' at [{step_x}, {step_y}] "
+                                    f"(offset: {step['offset_x']},{step['offset_y']}). Delay: {step_delay}s"
+                                )
+
+                                self.click_signal.emit(step_x, step_y, step_action)
+                                # Sleep after this step
+                                time.sleep(step_delay)
+                            break # execute one match per cycle
+
                 # Delay between scans (e.g. scanning ~10 times per second)
                 time.sleep(0.1)
 

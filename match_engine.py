@@ -41,11 +41,8 @@ class MatchEngine:
         target_text: str
     ) -> Optional[Tuple[int, int, float]]:
         """
-        OCR matching stub. In production, this imports pytesseract or easyocr
-        to perform optical character recognition on screen_bgr, parses text boxes,
-        and matches target_text.
+        Integrates with the OCREngine to locate target text on the screen
+        using pre-processed image OCR and case-insensitive matching.
         """
-        # Simulated OCR matching logic for demonstration and testing
-        # Returns a mock center position if target_text matches a keyword
-        print(f"[MatchEngine] Scanning screen for OCR text: '{target_text}'")
-        return None
+        from ocr_engine import OCREngine
+        return OCREngine.match_text_on_screen(screen_bgr, target_text)
