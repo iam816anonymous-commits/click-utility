@@ -16,7 +16,7 @@ class MacroRule:
     """
     Data model representing a visual macro click rule.
     """
-    def __init__(self, id_str: str, name: str, trigger_type: str, action: str, cooldown: float, threshold: float, template_path: str, click_steps: list = None, abs_x: int = None, abs_y: int = None):
+    def __init__(self, id_str: str, name: str, trigger_type: str, action: str, cooldown: float, threshold: float, template_path: str, click_steps: list = None, abs_x: int = None, abs_y: int = None, window_title: str = None, window_offset_x: int = None, window_offset_y: int = None):
         self.id_str = id_str
         self.name = name
         self.trigger_type = trigger_type
@@ -26,6 +26,9 @@ class MacroRule:
         self.template_path = template_path
         self.abs_x = abs_x
         self.abs_y = abs_y
+        self.window_title = window_title
+        self.window_offset_x = window_offset_x
+        self.window_offset_y = window_offset_y
         self.active = True
         self.last_triggered = 0.0
         # If no click steps specified, default to a single step at the center (offset 0,0)
@@ -142,6 +145,42 @@ class MonitoringWorker(QThread):
                                 step_action = step["action"]
                                 step_x = best_x + step["offset_x"]
                                 step_y = best_y + step["offset_y"]
+                                step_delay = step["delay"]
+
+                                self.log_signal.emit(
+                                    f"  -> Step #{i+1}: Clicking '{step_action}' at [{step_x}, {step_y}] "
+                                    f"(offset: {step['offset_x']},{step['offset_y']}). Delay: {step_delay}s"
+                                )
+
+                                self.click_signal.emit(step_x, step_y, step_action)
+                                # Sleep after this step
+                                time.sleep(step_delay)
+                            break # execute one match per cycle
+
+                    # Window-Relative Position matching
+                    elif rule.trigger_type == "Window-Relative Position":
+                        if rule.window_offset_x is not None and rule.window_offset_y is not None:
+                            # Retrieve the current active window location on the screen
+                            title, wx, wy, ww, wh = self.capture_engine.get_active_window_rect()
+
+                            # Calculate current absolute coordinates based on active window and saved offset
+                            target_x = wx + rule.window_offset_x
+                            target_y = wy + rule.window_offset_y
+
+                            with self.lock:
+                                rule.last_triggered = now
+
+                            self.log_signal.emit(
+                                f"[+] Window Relative Trigger Success: '{rule.name}' inside active window '{title}' "
+                                f"at offset [{rule.window_offset_x}, {rule.window_offset_y}] -> Screen [{target_x}, {target_y}]. "
+                                f"Executing click steps..."
+                            )
+
+                            # Process each step in sequence relative to computed active window target coordinates
+                            for i, step in enumerate(rule.click_steps):
+                                step_action = step["action"]
+                                step_x = target_x + step["offset_x"]
+                                step_y = target_y + step["offset_y"]
                                 step_delay = step["delay"]
 
                                 self.log_signal.emit(
@@ -299,13 +338,16 @@ class ApplicationCoordinator(QObject):
                     template_path=filepath,
                     click_steps=click_steps,
                     abs_x=mx,
-                    abs_y=my
+                    abs_y=my,
+                    window_title=dialog.window_title,
+                    window_offset_x=dialog.window_offset_x,
+                    window_offset_y=dialog.window_offset_y
                 )
                 with self.lock:
                     self.rules.append(new_rule)
 
                 self.refresh_rules_table()
-                self.dashboard.append_log(f"[✓] Saved new absolute cursor position rule: '{name}' targeting [{mx}, {my}]")
+                self.dashboard.append_log(f"[✓] Saved new rule: '{name}' (Trigger: {trigger_type})")
             except Exception as e:
                 self.dashboard.append_log(f"[!] Failed to save rule: {e}")
 

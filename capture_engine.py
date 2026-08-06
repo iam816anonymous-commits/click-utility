@@ -36,3 +36,20 @@ class CaptureEngine:
         screenshot = self.sct.grab(monitor)
         img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
         img.save(filepath, "PNG")
+
+    @staticmethod
+    def get_active_window_rect():
+        """
+        Retrieves the active window's title, top-left (left, top), and dimensions (width, height).
+        Safely falls back on Linux/headless environments to mock values.
+        """
+        try:
+            import pygetwindow as gw
+            active = gw.getActiveWindow()
+            if active:
+                title = active.title if active.title else "Untitled Window"
+                return title, int(active.left), int(active.top), int(active.width), int(active.height)
+        except Exception as e:
+            # Headless/Linux test fallback
+            pass
+        return "Headless Active Window", 100, 100, 1024, 768

@@ -93,13 +93,29 @@ class SaveTargetDialog(QDialog):
         # Trigger Type
         layout.addWidget(QLabel("<b>Trigger Mechanism:</b>"))
         self.trigger_combo = QComboBox()
-        self.trigger_combo.addItems(["Image Template Match", "OCR Text Match", "Absolute Cursor Position"])
+        self.trigger_combo.addItems(["Image Template Match", "OCR Text Match", "Absolute Cursor Position", "Window-Relative Position"])
         layout.addWidget(self.trigger_combo)
+
+        self.window_title = None
+        self.window_offset_x = None
+        self.window_offset_y = None
 
         if self.abs_x is not None and self.abs_y is not None:
             self.trigger_combo.setCurrentText("Absolute Cursor Position")
-            coords_lbl = QLabel(f"<font color='#059669'>🎯 Captured Cursor Coordinates: <b>X: {self.abs_x}, Y: {self.abs_y}</b></font>")
-            coords_lbl.setStyleSheet("padding: 4px; background-color: #ECFDF5; border: 1px solid #A7F3D0; border-radius: 4px;")
+
+            # Fetch active window metrics to calculate offsets
+            from capture_engine import CaptureEngine
+            self.window_title, wx, wy, ww, wh = CaptureEngine.get_active_window_rect()
+            self.window_offset_x = self.abs_x - wx
+            self.window_offset_y = self.abs_y - wy
+
+            coords_text = (
+                f"🎯 <b>Absolute Screen Spot:</b> X: {self.abs_x}, Y: {self.abs_y}<br>"
+                f"🪟 <b>Window Relative Offsets:</b> X: +{self.window_offset_x}, Y: +{self.window_offset_y} "
+                f"(inside <i>'{self.window_title}'</i>)"
+            )
+            coords_lbl = QLabel(coords_text)
+            coords_lbl.setStyleSheet("padding: 6px; background-color: #ECFDF5; border: 1px solid #A7F3D0; border-radius: 4px; font-size: 11px;")
             layout.addWidget(coords_lbl)
 
         # Cooldown Slider

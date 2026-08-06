@@ -77,6 +77,8 @@ The utility hooks into the keyboard at the kernel/OS level, enabling global hotk
 5. Provide a rule name, choose trigger type:
    - **Image Template Match**: Locates the visual target.
    - **OCR Text Match**: Reads screen text and locates the specified word.
+   - **Absolute Cursor Position**: Triggers instantly at the captured coordinates.
+   - **Window-Relative Position**: Triggers relative to the active window top-left corner, ensuring accurate clicks even if the window is moved on the screen!
 6. Slide the confidence threshold (default **90%** avoids false clicks like clicking a profile picture instead of a dashboard option).
 7. Configure the **Click Sequence Builder** below!
 

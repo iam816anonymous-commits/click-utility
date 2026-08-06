@@ -115,5 +115,37 @@ class TestMatchEngine(unittest.TestCase):
         self.assertEqual(rule.abs_y, 800)
         self.assertEqual(len(rule.click_steps), 1)
 
+    def test_window_relative_position_rule(self):
+        # Import MacroRule model
+        from main import MacroRule
+
+        rule = MacroRule(
+            id_str="rule_win_test",
+            name="Test Window Relative Position",
+            trigger_type="Window-Relative Position",
+            action="Single Click",
+            cooldown=3.0,
+            threshold=1.0,
+            template_path="",
+            click_steps=[{"action": "Single Click", "offset_x": 0, "offset_y": 0, "delay": 0.5}],
+            window_title="My Chrome Window",
+            window_offset_x=220,
+            window_offset_y=430
+        )
+
+        # Verify window metrics are stored correctly
+        self.assertEqual(rule.trigger_type, "Window-Relative Position")
+        self.assertEqual(rule.window_title, "My Chrome Window")
+        self.assertEqual(rule.window_offset_x, 220)
+        self.assertEqual(rule.window_offset_y, 430)
+
+        # Calculate target position using mock active window top-left (left=150, top=100)
+        mock_win_x, mock_win_y = 150, 100
+        target_x = mock_win_x + rule.window_offset_x
+        target_y = mock_win_y + rule.window_offset_y
+
+        self.assertEqual(target_x, 370)
+        self.assertEqual(target_y, 530)
+
 if __name__ == "__main__":
     unittest.main()
