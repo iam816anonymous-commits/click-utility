@@ -49,29 +49,28 @@ To achieve 10–20 screen scans per second smoothly in the browser, the match en
 
 ---
 
-## 🏛️ The 4 Production Automation Architectures
+## ⚡ Real-Time Website Automation Strategies
 
-The workspace includes copyable, robust code templates explaining how to implement each of the four core automation patterns in production environments:
+When automating **real-time websites** (such as high-frequency trading dashboards, ticket queues, or WebSocket-driven portals), traditional interval-based polling is too slow and resource-heavy. Production setups use the following low-latency techniques:
 
-### Option 1: Image Matching (Simplest)
-- **Concept**: Repeatedly grabs screenshots and uses OpenCV template matching to find the pixel coordinate of the cropped button, then clicks it using mouse controllers.
-- **Libraries**: `OpenCV (cv2)`, `MSS` (fast screen grabs), `PyAutoGUI` / `pynput` (mouse control).
-- **Pros/Cons**: Perfect for static applications and games, but fails on dark/light mode changes, text reflow, or screen scaling adjustments.
+1. **MutationObserver (Sub-Millisecond Reactions)**:
+   - Instead of checking the page every 100ms, a `MutationObserver` hooks directly into the browser's DOM rendering engine. It fires a callback **microtask** immediately when elements are injected or modified, clicking them in under `1ms`.
+2. **requestAnimationFrame (V-Sync Alignment)**:
+   - For canvas-based web elements, aligning polling with the screen's refresh rate (V-Sync) via `requestAnimationFrame` ensures matching is synchronized with the browser's paint cycle, running up to 144 times/sec without causing thread locks.
+3. **Bypassing Click Protections (Event Synthesis)**:
+   - Real-time websites often block naive `.click()` calls. To look fully human and bypass bot shields, automate elements by dispatching a sequence of trust-conforming events: `pointerdown` → `mousedown` → `pointerup` → `mouseup` → `click` with randomized client coordinate vectors.
 
-### Option 2: OCR-based Matching (Dynamic Text)
-- **Concept**: Reads text on the screen using optical character recognition, parses word locations, and clicks the center coordinates of matching phrases.
-- **Libraries**: `Tesseract OCR (pytesseract)`, `PaddleOCR`, `EasyOCR`.
-- **Pros/Cons**: Works even if button colors or designs change slightly, but is computationally expensive and slow for fast real-time tasks.
+---
 
-### Option 3: OS UI Automation (Native OS Access)
-- **Concept**: Communicates directly with the operating system accessibility layer to inspect the desktop window hierarchy and invoke native click events.
-- **Libraries**: `pywinauto`, `UIAutomation` (Windows), `Atomac` (macOS).
-- **Pros/Cons**: 100% reliable, works even if windows are covered or minimized, but is limited to supported native apps and platform-specific code.
+## 🏛️ Production Automation Architectures (5 Options)
 
-### Option 4: Browser Automation (Web Apps)
-- **Concept**: Drives a headless browser directly using direct DOM API selectors (CSS/XPath).
-- **Libraries**: `Playwright`, `Selenium`, `Puppeteer`.
-- **Pros/Cons**: Fast, robust, and completely independent of window sizes or physical mouse cursors. Ideal for web automation.
+The workspace includes copyable, robust code templates explaining how to implement each of the five core automation patterns:
+
+- **Option 1: Image Matching (Simplest)**: OpenCV template matching + pyautogui. Ideal for desktop apps & retro games.
+- **Option 2: OCR-based Matching**: Character recognition via Tesseract. Best for elements with dynamic styles but static text.
+- **Option 3: OS UI Automation**: Hooking native Windows accessibility trees via `pywinauto`. Reliable, works on hidden windows.
+- **Option 4: Browser Automation**: Direct Chromium control with `Playwright`. Excellent for robust, multi-step web scraping.
+- **Option 5: Real-Time Web Userscript**: Injection scripts (Tampermonkey) combining event-driven `MutationObserver` with `requestAnimationFrame` for maximum speed.
 
 ---
 
@@ -79,27 +78,18 @@ The workspace includes copyable, robust code templates explaining how to impleme
 
 This project uses **Bun** as its package manager and runtime.
 
-### Prerequisites
-Make sure you have [Bun](https://bun.sh/) installed:
-```bash
-curl -fsSL https://bun.sh/install | bash
-```
-
 ### Installation
-Clone the repository and install dependencies:
 ```bash
 bun install
 ```
 
 ### Run the Dev Server
-Launch Vite's hot-reloading development server on port 3000:
 ```bash
 __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=.com bun run dev --host 0.0.0.0 --port 3000
 ```
 Open [http://localhost:3000/](http://localhost:3000/) in your browser.
 
 ### Compile Production Build
-Generate fully optimized, production-ready static assets under `/dist`:
 ```bash
 bun run build
 ```

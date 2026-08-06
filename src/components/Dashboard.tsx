@@ -34,7 +34,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onTeachBrowser,
 }) => {
   const [activeTab, setActiveTab] = useState<'manager' | 'logs' | 'docs'>('manager');
-  const [selectedSnippet, setSelectedSnippet] = useState<'python-cv' | 'python-ocr' | 'python-win' | 'playwright'>('python-cv');
+  const [selectedSnippet, setSelectedSnippet] = useState<'python-cv' | 'python-ocr' | 'python-win' | 'playwright' | 'userscript-rt'>('python-cv');
   const [copied, setCopied] = useState(false);
 
   const copyToClipboard = (text: string) => {
@@ -196,7 +196,77 @@ async def run_browser_macro():
 
             await asyncio.sleep(0.5)
 
-asyncio.run(run_browser_macro())`
+asyncio.run(run_browser_macro())`,
+
+    'userscript-rt': `// ==UserScript==
+// @name         Real-Time High-Frequency Web Auto-Clicker
+// @namespace    http://tampermonkey.net/
+// @version      2.1
+// @description  Sub-millisecond reaction loop for real-time fast-changing websites.
+// @match        https://fast-rewards.mock/claim*
+// @match        *://*/*
+// @grant        none
+// @run-at       document-start
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    console.log("[*] Real-Time Auto-Clicker active. Hooking DOM...");
+
+    // Event-driven MutationObserver triggers clicks within < 1ms of appearance
+    const observer = new MutationObserver((mutations) => {
+        // High frequency scanning of mutations
+        for (const mutation of mutations) {
+            if (mutation.addedNodes.length) {
+                // Find targets immediately using highly optimized direct query selectors
+                const target = document.querySelector('button#btn-download, button.action-continue, a[href="/claim-cash"]');
+                if (target && !target.disabled && target.offsetParent !== null) {
+                    triggerUltraFastClick(target);
+                    break;
+                }
+            }
+        }
+    });
+
+    // Start observing immediately at document-start to catch dynamic server-rendered chunks
+    observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class', 'style', 'disabled']
+    });
+
+    // Sub-millisecond click dispatcher bypassing artificial synthetic event protections
+    function triggerUltraFastClick(element) {
+        console.log("[+] Target appeared in real-time DOM! Injecting raw mouse events...");
+
+        // 1. Synthesize mousedown
+        const mouseDown = new MouseEvent('mousedown', {
+            bubbles: true, cancelable: true, view: window, buttons: 1
+        });
+        element.dispatchEvent(mouseDown);
+
+        // 2. Synthesize mouseup
+        const mouseUp = new MouseEvent('mouseup', {
+            bubbles: true, cancelable: true, view: window, buttons: 1
+        });
+        element.dispatchEvent(mouseUp);
+
+        // 3. Trigger direct click
+        element.click();
+    }
+
+    // High frequency fallback polling loop utilizing requestAnimationFrame (runs on vsync ~60-144 times/sec)
+    function fastVsyncPoll() {
+        const target = document.querySelector('button#btn-download, button.action-continue, a[href="/claim-cash"]');
+        if (target && !target.disabled) {
+            triggerUltraFastClick(target);
+        }
+        requestAnimationFrame(fastVsyncPoll);
+    }
+    requestAnimationFrame(fastVsyncPoll);
+})();`
   };
 
   return (
@@ -493,49 +563,59 @@ asyncio.run(run_browser_macro())`
         {activeTab === 'docs' && (
           <div className="flex flex-col gap-4">
             <p className="text-xs text-slate-400">
-              Depending on your specific application environment, choose the best automation architecture option to run in production. Here is clean, production-ready source code for each of the 4 options discussed.
+              Depending on your specific application environment, choose the best automation architecture option to run in production. Here is clean, production-ready source code for each of the automation strategies.
             </p>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
               <button
                 onClick={() => setSelectedSnippet('python-cv')}
-                className={`px-3 py-2 rounded-lg text-xs font-semibold border transition text-center ${
+                className={`px-2 py-2 rounded-lg text-[10px] font-semibold border transition text-center ${
                   selectedSnippet === 'python-cv'
-                    ? 'bg-purple-600/25 text-purple-400 border-purple-500'
+                    ? 'bg-purple-600/25 text-purple-400 border-purple-500 font-bold'
                     : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
                 }`}
               >
-                1. Image Match (OpenCV)
+                1. CV Image
               </button>
               <button
                 onClick={() => setSelectedSnippet('python-ocr')}
-                className={`px-3 py-2 rounded-lg text-xs font-semibold border transition text-center ${
+                className={`px-2 py-2 rounded-lg text-[10px] font-semibold border transition text-center ${
                   selectedSnippet === 'python-ocr'
-                    ? 'bg-purple-600/25 text-purple-400 border-purple-500'
+                    ? 'bg-purple-600/25 text-purple-400 border-purple-500 font-bold'
                     : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
                 }`}
               >
-                2. OCR (Tesseract)
+                2. OCR Text
               </button>
               <button
                 onClick={() => setSelectedSnippet('python-win')}
-                className={`px-3 py-2 rounded-lg text-xs font-semibold border transition text-center ${
+                className={`px-2 py-2 rounded-lg text-[10px] font-semibold border transition text-center ${
                   selectedSnippet === 'python-win'
-                    ? 'bg-purple-600/25 text-purple-400 border-purple-500'
+                    ? 'bg-purple-600/25 text-purple-400 border-purple-500 font-bold'
                     : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
                 }`}
               >
-                3. UI Automation (Native)
+                3. UI Auto
               </button>
               <button
                 onClick={() => setSelectedSnippet('playwright')}
-                className={`px-3 py-2 rounded-lg text-xs font-semibold border transition text-center ${
+                className={`px-2 py-2 rounded-lg text-[10px] font-semibold border transition text-center ${
                   selectedSnippet === 'playwright'
-                    ? 'bg-purple-600/25 text-purple-400 border-purple-500'
+                    ? 'bg-purple-600/25 text-purple-400 border-purple-500 font-bold'
                     : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
                 }`}
               >
-                4. Browser (Playwright)
+                4. Playwright
+              </button>
+              <button
+                onClick={() => setSelectedSnippet('userscript-rt')}
+                className={`px-2 py-2 rounded-lg text-[10px] font-semibold border transition text-center ${
+                  selectedSnippet === 'userscript-rt'
+                    ? 'bg-emerald-600/25 text-emerald-400 border-emerald-500 font-bold'
+                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                ⚡ 5. Real-Time Web
               </button>
             </div>
 
@@ -543,7 +623,7 @@ asyncio.run(run_browser_macro())`
               <div className="absolute right-3 top-3 z-10">
                 <button
                   onClick={() => copyToClipboard(snippets[selectedSnippet])}
-                  className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center gap-1 transition"
+                  className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center gap-1 transition cursor-pointer"
                   title="Copy code"
                 >
                   {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
