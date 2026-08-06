@@ -1,7 +1,8 @@
 import sys
 import os
 import cv2
-import numpy as np
+import threading
+import time
 from PySide6.QtCore import QThread, Signal, Slot, Qt, QObject
 from PySide6.QtWidgets import QApplication, QDialog, QTableWidgetItem, QCheckBox
 
@@ -30,14 +31,16 @@ class MacroRule:
 class MonitoringWorker(QThread):
     """
     Background worker thread running the ultra-fast screen scanning and match-firing loop.
+    Safe against concurrent collection mutation by using thread locking.
     """
     log_signal = Signal(str)
     click_signal = Signal(int, int, str) # x, y, action
 
-    def __init__(self, capture_engine: CaptureEngine, rules: list[MacroRule]):
+    def __init__(self, capture_engine: CaptureEngine, rules: list[MacroRule], lock: threading.Lock):
         super().__init__()
         self.capture_engine = capture_engine
         self.rules = rules
+        self.lock = lock
         self.running = False
 
     def run(self):
@@ -48,10 +51,14 @@ class MonitoringWorker(QThread):
             try:
                 # Capture full screen using MSS
                 screen = self.capture_engine.capture_full_screen()
-                import time
                 now = time.time()
 
-                for rule in self.rules:
+                # Safely iterate over a copy of the rules list under lock to avoid race conditions
+                active_rules_snapshot = []
+                with self.lock:
+                    active_rules_snapshot = list(self.rules)
+
+                for rule in active_rules_snapshot:
                     if not rule.active:
                         continue
 
@@ -73,14 +80,18 @@ class MonitoringWorker(QThread):
                         match = MatchEngine.match_template(screen, template, rule.threshold)
                         if match:
                             click_x, click_y, conf = match
-                            rule.last_triggered = now
+
+                            # Safely write the last triggered timestamp
+                            with self.lock:
+                                rule.last_triggered = now
+
                             self.log_signal.emit(
                                 f"[+] Match Success: '{rule.name}' matched with {conf*100:.1f}% confidence. "
                                 f"Triggering {rule.action} at [{click_x}, {click_y}]"
                             )
-                            # Emit signal to perform safe GUI thread click or direct action
+                            # Emit signal to perform safe GUI thread click
                             self.click_signal.emit(click_x, click_y, rule.action)
-                            # Cooldown wait to prevent rapid multiple clicks
+                            # Small sleep between matched actions
                             time.sleep(0.1)
                             break # execute one match per cycle
 
@@ -104,6 +115,7 @@ class ApplicationCoordinator(QObject):
         self.app = app_instance
         self.capture_engine = CaptureEngine()
         self.rules: list[MacroRule] = []
+        self.lock = threading.Lock() # Thread lock protecting rule list reads and mutations
 
         # Create target storage directory
         os.makedirs("targets", exist_ok=True)
@@ -113,15 +125,10 @@ class ApplicationCoordinator(QObject):
         self.teach_overlay = TeachOverlay()
 
         # Initialize background monitor worker thread
-        self.monitor_thread = MonitoringWorker(self.capture_engine, self.rules)
+        self.monitor_thread = MonitoringWorker(self.capture_engine, self.rules, self.lock)
 
         # Initialize Click & Hotkey engine
-        self.click_engine = ClickEngine(
-            on_start=self.start_monitoring,
-            on_stop=self.stop_monitoring,
-            on_teach=self.trigger_teach,
-            on_emergency=self.emergency_abort
-        )
+        self.click_engine = ClickEngine()
 
         # Setup GUI signal connections
         self.connect_signals()
@@ -139,6 +146,12 @@ class ApplicationCoordinator(QObject):
         # Monitor thread signals
         self.monitor_thread.log_signal.connect(self.dashboard.append_log)
         self.monitor_thread.click_signal.connect(self.perform_macro_click)
+
+        # Global Hotkey Thread-Safe Signal bindings
+        self.click_engine.start_signal.connect(self.start_monitoring)
+        self.click_engine.stop_signal.connect(self.stop_monitoring)
+        self.click_engine.teach_signal.connect(self.trigger_teach)
+        self.click_engine.emergency_signal.connect(self.emergency_abort)
 
     def start_hotkeys(self):
         # Start global keyboard hotkeys in separate thread
@@ -161,8 +174,6 @@ class ApplicationCoordinator(QObject):
     @Slot()
     def trigger_teach(self):
         self.dashboard.append_log("[*] Initializing crosshair teaching overlay. Draw bounding box over target button.")
-        # Minimize dashboard briefly to allow clean desktop screenshot if needed,
-        # or simply show translucent overlay instantly.
         self.teach_overlay.show_overlay()
 
     @Slot(int, int, int, int)
@@ -179,28 +190,39 @@ class ApplicationCoordinator(QObject):
             threshold = float(dialog.conf_slider.value()) / 100.0
 
             # Store cropped screenshot target
-            import time
             rule_id = f"rule_{int(time.time())}"
             filepath = os.path.join("targets", f"{rule_id}.png")
 
             try:
                 self.capture_engine.save_template(x, y, w, h, filepath)
 
-                # Add Macro Rule
+                # Add Macro Rule safely under Thread Lock
                 new_rule = MacroRule(rule_id, name, trigger_type, action, cooldown, threshold, filepath)
-                self.rules.append(new_rule)
+                with self.lock:
+                    self.rules.append(new_rule)
+
                 self.refresh_rules_table()
                 self.dashboard.append_log(f"[✓] Saved new target rule: '{name}' template saved to {filepath}")
             except Exception as e:
                 self.dashboard.append_log(f"[!] Failed to save template: {e}")
 
     def refresh_rules_table(self):
-        self.dashboard.rules_table.setRowCount(len(self.rules))
-        for row, rule in enumerate(self.rules):
+        # Safely read rules snapshot under lock for UI refresh
+        rules_snapshot = []
+        with self.lock:
+            rules_snapshot = list(self.rules)
+
+        self.dashboard.rules_table.setRowCount(len(rules_snapshot))
+        for row, rule in enumerate(rules_snapshot):
             # Active check box
             chk = QCheckBox()
             chk.setChecked(rule.active)
-            chk.stateChanged.connect(lambda state, r=rule: setattr(r, "active", state == Qt.Checked))
+
+            # Setup safe status updater with lock
+            def make_active_updater(target_rule):
+                return lambda state: setattr(target_rule, "active", state == Qt.Checked)
+
+            chk.stateChanged.connect(make_active_updater(rule))
             self.dashboard.rules_table.setCellWidget(row, 0, chk)
 
             # Metadata columns

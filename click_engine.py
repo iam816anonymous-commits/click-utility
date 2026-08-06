@@ -1,21 +1,24 @@
-import time
 import pyautogui
 from pynput import keyboard
-from typing import Callable, Optional
+from PySide6.QtCore import QObject, Signal
+from typing import Optional
 
 # Set PyAutoGUI safety values
 pyautogui.PAUSE = 0.05
 pyautogui.FAILSAFE = True  # Move mouse to corner to abort
 
-class ClickEngine:
+class ClickEngine(QObject):
     """
     Handles mouse click dispatch, macro sequence delays, and global hotkeys triggers.
+    Inherits from QObject to safely emit Qt Signals when hotkeys are triggered from a background thread.
     """
-    def __init__(self, on_start: Callable, on_stop: Callable, on_teach: Callable, on_emergency: Callable):
-        self.on_start = on_start
-        self.on_stop = on_stop
-        self.on_teach = on_teach
-        self.on_emergency = on_emergency
+    start_signal = Signal()
+    stop_signal = Signal()
+    teach_signal = Signal()
+    emergency_signal = Signal()
+
+    def __init__(self):
+        super().__init__()
         self.listener: Optional[keyboard.Listener] = None
 
     def trigger_click(self, x: int, y: int, action_type: str = "Left Click"):
@@ -41,17 +44,18 @@ class ClickEngine:
         """
         Launches global system hotkey listener in the background.
         F8 = Start, F9 = Stop, F10 = Teach, Esc = Emergency Stop
+        Emits safe Qt Signals to be handled by the main thread.
         """
         def on_press(key):
             try:
                 if key == keyboard.Key.f8:
-                    self.on_start()
+                    self.start_signal.emit()
                 elif key == keyboard.Key.f9:
-                    self.on_stop()
+                    self.stop_signal.emit()
                 elif key == keyboard.Key.f10:
-                    self.on_teach()
+                    self.teach_signal.emit()
                 elif key == keyboard.Key.esc:
-                    self.on_emergency()
+                    self.emergency_signal.emit()
             except Exception as e:
                 print(f"[ClickEngine] Hotkey callback error: {e}")
 
