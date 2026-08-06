@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QTableWidget, QTableWidgetItem, QTextEdit,
     QSlider, QDialog, QLineEdit, QComboBox, QCheckBox, QStyle, QGroupBox,
-    QFileDialog
+    QFileDialog, QHeaderView
 )
 from PySide6.QtGui import QPainter, QPen, QColor, QFont
 
@@ -75,45 +75,81 @@ class SaveTargetDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Save Macro Automation Rule")
-        self.resize(320, 280)
+        self.resize(600, 650)
+        # Default with one single click step at the center (offset 0,0)
+        self.click_steps = [{"action": "Single Click", "offset_x": 0, "offset_y": 0, "delay": 0.5}]
         self.init_ui()
 
     def init_ui(self):
         layout = QVBoxLayout(self)
 
         # Target Name
-        layout.addWidget(QLabel("Target / Rule Name:"))
+        layout.addWidget(QLabel("<b>Target / Rule Name:</b>"))
         self.name_input = QLineEdit("My Macro Button")
         layout.addWidget(self.name_input)
 
         # Trigger Type
-        layout.addWidget(QLabel("Trigger Mechanism:"))
+        layout.addWidget(QLabel("<b>Trigger Mechanism:</b>"))
         self.trigger_combo = QComboBox()
         self.trigger_combo.addItems(["Image Template Match", "OCR Text Match"])
         layout.addWidget(self.trigger_combo)
 
-        # Click Action
-        layout.addWidget(QLabel("Mouse Click Action:"))
-        self.action_combo = QComboBox()
-        self.action_combo.addItems(["Left Click", "Double Click", "Right Click"])
-        layout.addWidget(self.action_combo)
-
         # Cooldown Slider
-        layout.addWidget(QLabel("Cooldown delay (Seconds):"))
+        layout.addWidget(QLabel("<b>Rule Cooldown Delay (Seconds):</b>"))
         self.cooldown_combo = QComboBox()
         self.cooldown_combo.addItems(["2", "3", "5", "8", "10", "15"])
         layout.addWidget(self.cooldown_combo)
 
         # Confidence Slider
-        layout.addWidget(QLabel("Confidence threshold:"))
+        layout.addWidget(QLabel("<b>Confidence Threshold (higher avoids false matches):</b>"))
         self.conf_slider = QSlider(Qt.Horizontal)
         self.conf_slider.setRange(50, 99)
-        self.conf_slider.setValue(85)
+        self.conf_slider.setValue(90)  # Default updated to 90%
         layout.addWidget(self.conf_slider)
 
-        self.conf_label = QLabel("85%")
+        self.conf_label = QLabel("90%")
         layout.addWidget(self.conf_label)
         self.conf_slider.valueChanged.connect(lambda v: self.conf_label.setText(f"{v}%"))
+
+        # --- Click Sequence Builder Group Box ---
+        seq_group = QGroupBox("Click Sequence Builder (Multiple Click Steps)")
+        seq_layout = QVBoxLayout(seq_group)
+
+        self.steps_table = QTableWidget()
+        self.steps_table.setColumnCount(5)
+        self.steps_table.setHorizontalHeaderLabels(["Step", "Action", "Offset (X, Y)", "Delay", "Delete"])
+        self.steps_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        seq_layout.addWidget(self.steps_table)
+
+        # Controls to add a new step
+        add_ctrls_layout = QHBoxLayout()
+
+        self.step_action_combo = QComboBox()
+        self.step_action_combo.addItems(["Single Click", "Double Click", "Right Click"])
+
+        self.step_x_input = QLineEdit("0")
+        self.step_x_input.setPlaceholderText("X Offset")
+
+        self.step_y_input = QLineEdit("0")
+        self.step_y_input.setPlaceholderText("Y Offset")
+
+        self.step_delay_input = QLineEdit("0.5")
+        self.step_delay_input.setPlaceholderText("Delay (s)")
+
+        self.add_step_btn = QPushButton("➕ Add Click Step")
+        self.add_step_btn.clicked.connect(self.add_click_step)
+
+        add_ctrls_layout.addWidget(self.step_action_combo)
+        add_ctrls_layout.addWidget(self.step_x_input)
+        add_ctrls_layout.addWidget(self.step_y_input)
+        add_ctrls_layout.addWidget(self.step_delay_input)
+        add_ctrls_layout.addWidget(self.add_step_btn)
+
+        seq_layout.addLayout(add_ctrls_layout)
+        layout.addWidget(seq_group)
+
+        # Render initial steps table
+        self.refresh_steps_table()
 
         # Save & Cancel Buttons
         btns_layout = QHBoxLayout()
@@ -124,6 +160,59 @@ class SaveTargetDialog(QDialog):
         btns_layout.addWidget(self.cancel_btn)
         btns_layout.addWidget(self.save_btn)
         layout.addLayout(btns_layout)
+
+    def add_click_step(self):
+        action = self.step_action_combo.currentText()
+        try:
+            offset_x = int(self.step_x_input.text())
+        except ValueError:
+            offset_x = 0
+
+        try:
+            offset_y = int(self.step_y_input.text())
+        except ValueError:
+            offset_y = 0
+
+        try:
+            delay = float(self.step_delay_input.text())
+        except ValueError:
+            delay = 0.5
+
+        new_step = {
+            "action": action,
+            "offset_x": offset_x,
+            "offset_y": offset_y,
+            "delay": delay
+        }
+        self.click_steps.append(new_step)
+        self.refresh_steps_table()
+
+        # Reset offset fields for next step
+        self.step_x_input.setText("0")
+        self.step_y_input.setText("0")
+
+    def delete_click_step(self, index: int):
+        if 0 <= index < len(self.click_steps):
+            self.click_steps.pop(index)
+            self.refresh_steps_table()
+
+    def refresh_steps_table(self):
+        self.steps_table.setRowCount(len(self.click_steps))
+        for row, step in enumerate(self.click_steps):
+            self.steps_table.setItem(row, 0, QTableWidgetItem(f"#{row+1}"))
+            self.steps_table.setItem(row, 1, QTableWidgetItem(step["action"]))
+            self.steps_table.setItem(row, 2, QTableWidgetItem(f"({step['offset_x']}, {step['offset_y']})"))
+            self.steps_table.setItem(row, 3, QTableWidgetItem(f"{step['delay']}s"))
+
+            # Delete button
+            del_btn = QPushButton("🗑️")
+            del_btn.setToolTip("Delete this click step")
+
+            def make_deleter(idx):
+                return lambda: self.delete_click_step(idx)
+
+            del_btn.clicked.connect(make_deleter(row))
+            self.steps_table.setCellWidget(row, 4, del_btn)
 
 
 class NativeDashboard(QMainWindow):
@@ -159,10 +248,11 @@ class NativeDashboard(QMainWindow):
 
         # Active Rules Table
         self.rules_table = QTableWidget()
-        self.rules_table.setColumnCount(7)
+        self.rules_table.setColumnCount(8)
         self.rules_table.setHorizontalHeaderLabels([
-            "Active", "Name", "Trigger Type", "Action", "Cooldown", "Threshold", "Last Trigger"
+            "Active", "Name", "Trigger Type", "Action", "Cooldown", "Threshold", "Last Trigger", "Actions"
         ])
+        self.rules_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         left_layout.addWidget(self.rules_table)
 
         # Right Column: Monitoring Logs & Specs

@@ -1,3 +1,16 @@
+import os
+import sys
+from unittest.mock import MagicMock
+
+# Mock sys.modules for GUI/X11 modules during unit testing to prevent connection errors
+sys.modules['pyautogui'] = MagicMock()
+sys.modules['pynput'] = MagicMock()
+sys.modules['pynput.keyboard'] = MagicMock()
+sys.modules['PySide6'] = MagicMock()
+sys.modules['PySide6.QtCore'] = MagicMock()
+sys.modules['PySide6.QtWidgets'] = MagicMock()
+sys.modules['PySide6.QtGui'] = MagicMock()
+
 import unittest
 import numpy as np
 from match_engine import MatchEngine
@@ -39,6 +52,45 @@ class TestMatchEngine(unittest.TestCase):
         # Attempting match should return None
         result = MatchEngine.match_template(self.screen, different_template, threshold=0.85)
         self.assertIsNone(result)
+
+    def test_macro_rule_multi_step_sequence(self):
+        # Import MacroRule model
+        from main import MacroRule
+
+        # Configure a custom multi-step click sequence
+        custom_steps = [
+            {"action": "Single Click", "offset_x": 10, "offset_y": 20, "delay": 0.1},
+            {"action": "Double Click", "offset_x": 0, "offset_y": -50, "delay": 1.5},
+            {"action": "Right Click", "offset_x": -100, "offset_y": 0, "delay": 0.5}
+        ]
+
+        rule = MacroRule(
+            id_str="rule_seq_test",
+            name="Test Sequence",
+            trigger_type="Image Template Match",
+            action="Sequence",
+            cooldown=5.0,
+            threshold=0.90,
+            template_path="targets/fake.png",
+            click_steps=custom_steps
+        )
+
+        # Verify the steps are stored in correct order
+        self.assertEqual(len(rule.click_steps), 3)
+        self.assertEqual(rule.click_steps[0]["action"], "Single Click")
+        self.assertEqual(rule.click_steps[0]["offset_x"], 10)
+        self.assertEqual(rule.click_steps[0]["offset_y"], 20)
+        self.assertEqual(rule.click_steps[0]["delay"], 0.1)
+
+        self.assertEqual(rule.click_steps[1]["action"], "Double Click")
+        self.assertEqual(rule.click_steps[1]["offset_x"], 0)
+        self.assertEqual(rule.click_steps[1]["offset_y"], -50)
+        self.assertEqual(rule.click_steps[1]["delay"], 1.5)
+
+        self.assertEqual(rule.click_steps[2]["action"], "Right Click")
+        self.assertEqual(rule.click_steps[2]["offset_x"], -100)
+        self.assertEqual(rule.click_steps[2]["offset_y"], 0)
+        self.assertEqual(rule.click_steps[2]["delay"], 0.5)
 
 if __name__ == "__main__":
     unittest.main()

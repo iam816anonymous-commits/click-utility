@@ -4,7 +4,7 @@ import cv2
 import threading
 import time
 from PySide6.QtCore import QThread, Signal, Slot, Qt, QObject
-from PySide6.QtWidgets import QApplication, QDialog, QTableWidgetItem, QCheckBox
+from PySide6.QtWidgets import QApplication, QDialog, QTableWidgetItem, QCheckBox, QPushButton
 
 # Import modular custom engines
 from capture_engine import CaptureEngine
@@ -16,7 +16,7 @@ class MacroRule:
     """
     Data model representing a visual macro click rule.
     """
-    def __init__(self, id_str: str, name: str, trigger_type: str, action: str, cooldown: float, threshold: float, template_path: str):
+    def __init__(self, id_str: str, name: str, trigger_type: str, action: str, cooldown: float, threshold: float, template_path: str, click_steps: list = None):
         self.id_str = id_str
         self.name = name
         self.trigger_type = trigger_type
@@ -26,6 +26,11 @@ class MacroRule:
         self.template_path = template_path
         self.active = True
         self.last_triggered = 0.0
+        # If no click steps specified, default to a single step at the center (offset 0,0)
+        if click_steps is None:
+            self.click_steps = [{"action": action, "offset_x": 0, "offset_y": 0, "delay": 0.5}]
+        else:
+            self.click_steps = click_steps
 
 
 class MonitoringWorker(QThread):
@@ -76,24 +81,46 @@ class MonitoringWorker(QThread):
                         if template is None:
                             continue
 
-                        # Search template in current screen capture
-                        match = MatchEngine.match_template(screen, template, rule.threshold)
+                        # Search template in current screen capture (pass threshold=0.0 to find the best candidate)
+                        match = MatchEngine.match_template(screen, template, threshold=0.0)
                         if match:
-                            click_x, click_y, conf = match
+                            best_x, best_y, conf = match
+                            if conf >= rule.threshold:
+                                # Safely write the last triggered timestamp
+                                with self.lock:
+                                    rule.last_triggered = now
 
-                            # Safely write the last triggered timestamp
-                            with self.lock:
-                                rule.last_triggered = now
+                                self.log_signal.emit(
+                                    f"[+] Match Success: '{rule.name}' matched with {conf*100:.1f}% confidence "
+                                    f"(threshold {rule.threshold*100:.1f}%). Executing click steps..."
+                                )
 
-                            self.log_signal.emit(
-                                f"[+] Match Success: '{rule.name}' matched with {conf*100:.1f}% confidence. "
-                                f"Triggering {rule.action} at [{click_x}, {click_y}]"
-                            )
-                            # Emit signal to perform safe GUI thread click
-                            self.click_signal.emit(click_x, click_y, rule.action)
-                            # Small sleep between matched actions
-                            time.sleep(0.1)
-                            break # execute one match per cycle
+                                # Process each step in sequence
+                                for i, step in enumerate(rule.click_steps):
+                                    step_action = step["action"]
+                                    step_x = best_x + step["offset_x"]
+                                    step_y = best_y + step["offset_y"]
+                                    step_delay = step["delay"]
+
+                                    self.log_signal.emit(
+                                        f"  -> Step #{i+1}: Clicking '{step_action}' at [{step_x}, {step_y}] "
+                                        f"(offset: {step['offset_x']},{step['offset_y']}). Delay: {step_delay}s"
+                                    )
+
+                                    self.click_signal.emit(step_x, step_y, step_action)
+                                    # Sleep after this step
+                                    time.sleep(step_delay)
+                                break # execute one match per cycle
+                            else:
+                                # Throttle mismatch logging to avoid flooding the console
+                                if not hasattr(rule, "last_mismatch_log"):
+                                    rule.last_mismatch_log = 0.0
+                                if now - rule.last_mismatch_log > 3.0:
+                                    rule.last_mismatch_log = now
+                                    self.log_signal.emit(
+                                        f"[*] Scan: Best candidate for '{rule.name}' is at [{best_x}, {best_y}] "
+                                        f"with {conf*100:.1f}% confidence. (Threshold is {rule.threshold*100:.1f}%)."
+                                    )
 
                 # Delay between scans (e.g. scanning ~10 times per second)
                 time.sleep(0.1)
@@ -185,9 +212,14 @@ class ApplicationCoordinator(QObject):
         if dialog.exec() == QDialog.Accepted:
             name = dialog.name_input.text()
             trigger_type = dialog.trigger_combo.currentText()
-            action = dialog.action_combo.currentText()
             cooldown = float(dialog.cooldown_combo.currentText())
             threshold = float(dialog.conf_slider.value()) / 100.0
+
+            click_steps = dialog.click_steps
+            if len(click_steps) == 1:
+                action = click_steps[0]["action"]
+            else:
+                action = f"Sequence ({len(click_steps)} steps)"
 
             # Store cropped screenshot target
             rule_id = f"rule_{int(time.time())}"
@@ -197,7 +229,7 @@ class ApplicationCoordinator(QObject):
                 self.capture_engine.save_template(x, y, w, h, filepath)
 
                 # Add Macro Rule safely under Thread Lock
-                new_rule = MacroRule(rule_id, name, trigger_type, action, cooldown, threshold, filepath)
+                new_rule = MacroRule(rule_id, name, trigger_type, action, cooldown, threshold, filepath, click_steps=click_steps)
                 with self.lock:
                     self.rules.append(new_rule)
 
@@ -232,6 +264,38 @@ class ApplicationCoordinator(QObject):
             self.dashboard.rules_table.setItem(row, 4, QTableWidgetItem(f"{rule.cooldown}s"))
             self.dashboard.rules_table.setItem(row, 5, QTableWidgetItem(f"{rule.threshold*100:.0f}%"))
             self.dashboard.rules_table.setItem(row, 6, QTableWidgetItem("Never"))
+
+            # Delete button
+            del_btn = QPushButton("🗑️ Delete")
+            del_btn.setToolTip("Delete this rule")
+
+            def make_rule_deleter(target_rule_id):
+                return lambda: self.delete_rule(target_rule_id)
+
+            del_btn.clicked.connect(make_rule_deleter(rule.id_str))
+            self.dashboard.rules_table.setCellWidget(row, 7, del_btn)
+
+    def delete_rule(self, rule_id: str):
+        # Safely mutate rules list under lock
+        with self.lock:
+            # Find and remove rule
+            rule_to_remove = None
+            for r in self.rules:
+                if r.id_str == rule_id:
+                    rule_to_remove = r
+                    break
+
+            if rule_to_remove:
+                self.rules.remove(rule_to_remove)
+                # Try to delete file from disk
+                try:
+                    if os.path.exists(rule_to_remove.template_path):
+                        os.remove(rule_to_remove.template_path)
+                except Exception as e:
+                    self.dashboard.append_log(f"[!] Warning: Could not delete rule template file: {e}")
+                self.dashboard.append_log(f"[-] Deleted rule: '{rule_to_remove.name}'")
+
+        self.refresh_rules_table()
 
     @Slot(int, int, str)
     def perform_macro_click(self, x: int, y: int, action_type: str):
