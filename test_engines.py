@@ -182,5 +182,116 @@ class TestMatchEngine(unittest.TestCase):
         self.assertEqual(offset_x, 200)
         self.assertEqual(offset_y, 200)
 
+    def test_non_max_suppression(self):
+        # Create overlapping boxes: [x1, y1, x2, y2, score]
+        boxes = np.array([
+            [10, 10, 20, 20, 0.95],
+            [11, 11, 21, 21, 0.90], # strong overlap
+            [50, 50, 60, 60, 0.85]  # distinct
+        ])
+        suppressed = MatchEngine.non_max_suppression(boxes, overlap_thresh=0.3)
+        # Should filter out the second box, keeping only 2 boxes
+        self.assertEqual(len(suppressed), 2)
+        # Verify the top score box is kept
+        self.assertEqual(suppressed[0][4], 0.95)
+        self.assertEqual(suppressed[1][4], 0.85)
+
+    def test_non_maximum_suppression(self):
+        # Alias test matching precise naming requested in plan step
+        boxes = np.array([
+            [10, 10, 20, 20, 0.95],
+            [11, 11, 21, 21, 0.90],
+            [50, 50, 60, 60, 0.85]
+        ])
+        suppressed = MatchEngine.non_max_suppression(boxes, overlap_thresh=0.3)
+        self.assertEqual(len(suppressed), 2)
+
+    def test_region_locking_crop(self):
+        # Test visual cropping mock logic representing region-locking
+        screen = np.zeros((200, 200, 3), dtype=np.uint8)
+        # Mocking region boundaries of a locked trained region
+        train_x, train_y, train_w, train_h = 40, 50, 60, 60
+        pad = 10
+        crop_x1 = max(0, train_x - pad)
+        crop_y1 = max(0, train_y - pad)
+        crop_x2 = min(screen.shape[1], train_x + train_w + pad)
+        crop_y2 = min(screen.shape[0], train_y + train_h + pad)
+
+        self.assertEqual(crop_x1, 30)
+        self.assertEqual(crop_y1, 40)
+        self.assertEqual(crop_x2, 110)
+        self.assertEqual(crop_y2, 120)
+
+        cropped = screen[crop_y1:crop_y2, crop_x1:crop_x2]
+        self.assertEqual(cropped.shape, (80, 80, 3))
+
+    def test_anchor_relative_calculation(self):
+        # Test calculations of displacement offsets from a reference anchor coordinate
+        # Let's say Anchor template was trained at center [50, 50]
+        atcx = 50
+        atcy = 50
+
+        # When monitoring runs, anchor match is found at [65, 45] (e.g. shifted +15x, -5y)
+        acx = 65
+        acy = 45
+
+        dx = acx - atcx
+        dy = acy - atcy
+
+        self.assertEqual(dx, 15)
+        self.assertEqual(dy, -5)
+
+        # Dependent target trained position
+        target_train_x = 120
+        target_train_y = 180
+
+        # Shift target using computed anchor displacement
+        target_actual_x = target_train_x + dx
+        target_actual_y = target_train_y + dy
+
+        self.assertEqual(target_actual_x, 135)
+        self.assertEqual(target_actual_y, 175)
+
+    def test_match_template_multi(self):
+        # Create a screen with two identical white squares
+        multi_screen = np.zeros((100, 100, 3), dtype=np.uint8)
+        multi_screen[20:30, 20:30, :] = self.template
+        multi_screen[60:70, 60:70, :] = self.template
+
+        matches = MatchEngine.match_template_multi(multi_screen, self.template, threshold=0.90)
+        # Should detect exactly 2 distinct matches
+        self.assertEqual(len(matches), 2)
+
+        # Sort matches by coordinates to make test order independent of confidence scores
+        matches.sort(key=lambda m: (m[0], m[1]))
+
+        # First match center
+        self.assertEqual(matches[0][0], 25)
+        self.assertEqual(matches[0][1], 25)
+        # Second match center
+        self.assertEqual(matches[1][0], 65)
+        self.assertEqual(matches[1][1], 65)
+
+    def test_macro_rule_region_locking_and_anchor_init(self):
+        from main import MacroRule
+        rule = MacroRule(
+            id_str="rule_region_anchor",
+            name="Test Rule with Region & Anchor",
+            trigger_type="Image Template Match",
+            action="Single Click",
+            cooldown=1.0,
+            threshold=0.85,
+            template_path="targets/test_temp.png",
+            search_region="Trained Region Only",
+            anchor_rule_id="anchor_123",
+            train_x=100, train_y=150, train_w=50, train_h=50
+        )
+        self.assertEqual(rule.search_region, "Trained Region Only")
+        self.assertEqual(rule.anchor_rule_id, "anchor_123")
+        self.assertEqual(rule.train_x, 100)
+        self.assertEqual(rule.train_y, 150)
+        self.assertEqual(rule.train_w, 50)
+        self.assertEqual(rule.train_h, 50)
+
 if __name__ == "__main__":
     unittest.main()

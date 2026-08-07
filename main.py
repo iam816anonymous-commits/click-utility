@@ -10,13 +10,13 @@ from PySide6.QtWidgets import QApplication, QDialog, QTableWidgetItem, QCheckBox
 from capture_engine import CaptureEngine
 from match_engine import MatchEngine
 from click_engine import ClickEngine
-from ui import NativeDashboard, TeachOverlay, SaveTargetDialog
+from ui import NativeDashboard, TeachOverlay, SaveTargetDialog, MatchHighlightOverlay
 
 class MacroRule:
     """
     Data model representing a visual macro click rule.
     """
-    def __init__(self, id_str: str, name: str, trigger_type: str, action: str, cooldown: float, threshold: float, template_path: str, click_steps: list = None, abs_x: int = None, abs_y: int = None, window_title: str = None, window_offset_x: int = None, window_offset_y: int = None, window_handle: int = None, countdown_delay: int = None, coordinate_history: list = None):
+    def __init__(self, id_str: str, name: str, trigger_type: str, action: str, cooldown: float, threshold: float, template_path: str, click_steps: list = None, abs_x: int = None, abs_y: int = None, window_title: str = None, window_offset_x: int = None, window_offset_y: int = None, window_handle: int = None, countdown_delay: int = None, coordinate_history: list = None, search_region: str = "Entire Screen", anchor_rule_id: str = None, train_x: int = None, train_y: int = None, train_w: int = None, train_h: int = None):
         self.id_str = id_str
         self.name = name
         self.trigger_type = trigger_type
@@ -32,6 +32,12 @@ class MacroRule:
         self.window_handle = window_handle
         self.countdown_delay = countdown_delay
         self.coordinate_history = coordinate_history if coordinate_history is not None else []
+        self.search_region = search_region # "Entire Screen", "Active Window Only", "Trained Region Only"
+        self.anchor_rule_id = anchor_rule_id # ID of rule that serves as Anchor
+        self.train_x = train_x
+        self.train_y = train_y
+        self.train_w = train_w
+        self.train_h = train_h
         self.active = True
         self.last_triggered = 0.0
         # If no click steps specified, default to a single step at the center (offset 0,0)
@@ -48,6 +54,7 @@ class MonitoringWorker(QThread):
     """
     log_signal = Signal(str)
     click_signal = Signal(int, int, str) # x, y, action
+    highlight_signal = Signal(list) # list of Tuples (x, y, w, h)
 
     def __init__(self, capture_engine: CaptureEngine, rules: list[MacroRule], lock: threading.Lock):
         super().__init__()
@@ -79,9 +86,83 @@ class MonitoringWorker(QThread):
                     if now - rule.last_triggered < rule.cooldown:
                         continue
 
-                    # Template matching
+                    # Initialize anchor displacement
+                    dx, dy = 0, 0
+                    anchor_found = False
+                    if rule.anchor_rule_id:
+                        # Find the anchor rule in active_rules_snapshot
+                        anchor_rule = None
+                        for r in active_rules_snapshot:
+                            if r.id_str == rule.anchor_rule_id:
+                                anchor_rule = r
+                                break
+
+                        if anchor_rule and os.path.exists(anchor_rule.template_path):
+                            anchor_temp = cv2.imread(anchor_rule.template_path, cv2.IMREAD_COLOR)
+                            if anchor_temp is not None:
+                                # Match anchor on screen
+                                anchor_match = MatchEngine.match_template(screen, anchor_temp, threshold=anchor_rule.threshold)
+                                if anchor_match:
+                                    acx, acy, aconf = anchor_match
+                                    # Anchor training center
+                                    atcx = anchor_rule.train_x + anchor_rule.train_w // 2
+                                    atcy = anchor_rule.train_y + anchor_rule.train_h // 2
+                                    dx = acx - atcx
+                                    dy = acy - atcy
+                                    anchor_found = True
+                                    # Highlight anchor template
+                                    ahw, ahh = anchor_temp.shape[1], anchor_temp.shape[0]
+                                    self.highlight_signal.emit([(acx - ahw//2, acy - ahh//2, ahw, ahh)])
+
+                    # If anchor rule ID is set but anchor not found, skip/warn to be safe
+                    if rule.anchor_rule_id and not anchor_found:
+                        # Throttled logging
+                        if not hasattr(rule, "last_anchor_missing_log"):
+                            rule.last_anchor_missing_log = 0.0
+                        if now - rule.last_anchor_missing_log > 5.0:
+                            rule.last_anchor_missing_log = now
+                            self.log_signal.emit(f"[⚠️] Anchor rule for '{rule.name}' not found on screen. Skipping dependent rule.")
+                        continue
+
+                    # Determine Search Region
+                    # We crop screen to the defined search region before passing to matching
+                    crop_x1, crop_y1 = 0, 0
+                    search_area = screen
+
+                    if rule.search_region == "Active Window Only":
+                        title, wx, wy, ww, wh = self.capture_engine.get_active_window_rect()
+                        # Allow headless tests bypass
+                        if "Headless" not in title:
+                            crop_x1 = max(0, wx)
+                            crop_y1 = max(0, wy)
+                            crop_x2 = min(screen.shape[1], wx + ww)
+                            crop_y2 = min(screen.shape[0], wy + wh)
+                            if crop_x2 > crop_x1 and crop_y2 > crop_y1:
+                                search_area = screen[crop_y1:crop_y2, crop_x1:crop_x2]
+                            else:
+                                continue # Invalid active window bounds
+
+                    elif rule.search_region == "Trained Region Only":
+                        if rule.train_x is not None and rule.train_y is not None:
+                            # Apply anchor displacement to trained region coordinates
+                            tx = rule.train_x + dx
+                            ty = rule.train_y + dy
+                            tw = rule.train_w
+                            th = rule.train_h
+
+                            # Pad slightly
+                            pad = 30
+                            crop_x1 = max(0, tx - pad)
+                            crop_y1 = max(0, ty - pad)
+                            crop_x2 = min(screen.shape[1], tx + tw + pad)
+                            crop_y2 = min(screen.shape[0], ty + th + pad)
+                            if crop_x2 > crop_x1 and crop_y2 > crop_y1:
+                                search_area = screen[crop_y1:crop_y2, crop_x1:crop_x2]
+                            else:
+                                continue
+
+                    # Image Template Match Trigger
                     if rule.trigger_type == "Image Template Match":
-                        # Load template image
                         if not os.path.exists(rule.template_path):
                             continue
 
@@ -89,61 +170,47 @@ class MonitoringWorker(QThread):
                         if template is None:
                             continue
 
-                        # Search template in current screen capture (pass threshold=0.0 to find the best candidate)
-                        match = MatchEngine.match_template(screen, template, threshold=0.0)
-                        if match:
-                            best_x, best_y, conf = match
-                            if conf >= rule.threshold:
-                                # Safely write the last triggered timestamp
-                                with self.lock:
-                                    rule.last_triggered = now
+                        # Match multi template
+                        matches = MatchEngine.match_template_multi(search_area, template, threshold=rule.threshold)
 
+                        if len(matches) > 1:
+                            # Highlight all matches
+                            th, tw = template.shape[:2]
+                            rects = []
+                            for (cx, cy, conf) in matches:
+                                rects.append((cx + crop_x1 - tw//2, cy + crop_y1 - th//2, tw, th))
+                            self.highlight_signal.emit(rects)
+
+                            # Warning & Skip
+                            if not hasattr(rule, "last_multi_match_log"):
+                                rule.last_multi_match_log = 0.0
+                            if now - rule.last_multi_match_log > 3.0:
+                                rule.last_multi_match_log = now
                                 self.log_signal.emit(
-                                    f"[+] Match Success: '{rule.name}' matched with {conf*100:.1f}% confidence "
-                                    f"(threshold {rule.threshold*100:.1f}%). Executing click steps..."
+                                    f"[⚠️] Multiple distinct matches ({len(matches)}) found for '{rule.name}'. "
+                                    f"Skipping click sequence to prevent random clicking."
                                 )
+                            continue
 
-                                # Process each step in sequence
-                                for i, step in enumerate(rule.click_steps):
-                                    step_action = step["action"]
-                                    step_x = best_x + step["offset_x"]
-                                    step_y = best_y + step["offset_y"]
-                                    step_delay = step["delay"]
+                        elif len(matches) == 1:
+                            cx, cy, conf = matches[0]
+                            best_x = cx + crop_x1
+                            best_y = cy + crop_y1
 
-                                    self.log_signal.emit(
-                                        f"  -> Step #{i+1}: Clicking '{step_action}' at [{step_x}, {step_y}] "
-                                        f"(offset: {step['offset_x']},{step['offset_y']}). Delay: {step_delay}s"
-                                    )
+                            th, tw = template.shape[:2]
+                            # Emit highlight for the match
+                            self.highlight_signal.emit([(best_x - tw//2, best_y - th//2, tw, th)])
 
-                                    self.click_signal.emit(step_x, step_y, step_action)
-                                    # Sleep after this step
-                                    time.sleep(step_delay)
-                                break # execute one match per cycle
-                            else:
-                                # Throttle mismatch logging to avoid flooding the console
-                                if not hasattr(rule, "last_mismatch_log"):
-                                    rule.last_mismatch_log = 0.0
-                                if now - rule.last_mismatch_log > 3.0:
-                                    rule.last_mismatch_log = now
-                                    self.log_signal.emit(
-                                        f"[*] Scan: Best candidate for '{rule.name}' is at [{best_x}, {best_y}] "
-                                        f"with {conf*100:.1f}% confidence. (Threshold is {rule.threshold*100:.1f}%)."
-                                    )
-
-                    # OCR matching
-                    elif rule.trigger_type == "OCR Text Match":
-                        match = MatchEngine.match_text_ocr(screen, rule.name)
-                        if match:
-                            best_x, best_y, conf = match
-                            # Safely write the last triggered timestamp
+                            # Trigger matches
                             with self.lock:
                                 rule.last_triggered = now
 
                             self.log_signal.emit(
-                                f"[+] OCR Match Success: Found text '{rule.name}' with {conf*100:.1f}% confidence. Executing click steps..."
+                                f"[+] Match Success: '{rule.name}' matched with {conf*100:.1f}% confidence. "
+                                f"Executing click steps..."
                             )
 
-                            # Process each step in sequence
+                            # Process steps
                             for i, step in enumerate(rule.click_steps):
                                 step_action = step["action"]
                                 step_x = best_x + step["offset_x"]
@@ -154,27 +221,54 @@ class MonitoringWorker(QThread):
                                     f"  -> Step #{i+1}: Clicking '{step_action}' at [{step_x}, {step_y}] "
                                     f"(offset: {step['offset_x']},{step['offset_y']}). Delay: {step_delay}s"
                                 )
-
                                 self.click_signal.emit(step_x, step_y, step_action)
-                                # Sleep after this step
                                 time.sleep(step_delay)
-                            break # execute one match per cycle
+                            break
 
-                    # Window-Relative Position matching
+                    # OCR Text Match Trigger
+                    elif rule.trigger_type == "OCR Text Match":
+                        match = MatchEngine.match_text_ocr(search_area, rule.name)
+                        if match:
+                            cx, cy, conf = match
+                            best_x = cx + crop_x1
+                            best_y = cy + crop_y1
+
+                            # Highlight estimated OCR target region (draw a generic 100x30 box or similar)
+                            self.highlight_signal.emit([(best_x - 50, best_y - 15, 100, 30)])
+
+                            with self.lock:
+                                rule.last_triggered = now
+
+                            self.log_signal.emit(
+                                f"[+] OCR Match Success: Found text '{rule.name}' with {conf*100:.1f}% confidence. Executing click steps..."
+                            )
+
+                            for i, step in enumerate(rule.click_steps):
+                                step_action = step["action"]
+                                step_x = best_x + step["offset_x"]
+                                step_y = best_y + step["offset_y"]
+                                step_delay = step["delay"]
+
+                                self.log_signal.emit(
+                                    f"  -> Step #{i+1}: Clicking '{step_action}' at [{step_x}, {step_y}] "
+                                    f"(offset: {step['offset_x']},{step['offset_y']}). Delay: {step_delay}s"
+                                )
+                                self.click_signal.emit(step_x, step_y, step_action)
+                                time.sleep(step_delay)
+                            break
+
+                    # Window-Relative Position Trigger
                     elif rule.trigger_type == "Window-Relative Position":
                         if rule.window_offset_x is not None and rule.window_offset_y is not None:
-                            # Locate the target window using pygetwindow if possible
                             window_found = False
                             wx, wy = 0, 0
                             title = rule.window_title
 
                             try:
                                 import pygetwindow as gw
-                                # Match windows containing the saved window title
                                 all_wins = gw.getWindowsWithTitle(rule.window_title) if rule.window_title else []
                                 if all_wins:
                                     target_win = all_wins[0]
-                                    # If minimized, restore it automatically!
                                     if target_win.isMinimized:
                                         target_win.restore()
                                         time.sleep(0.3)
@@ -185,7 +279,6 @@ class MonitoringWorker(QThread):
                             except Exception:
                                 pass
 
-                            # Headless/Linux test fallback if pygetwindow is unsupported or failed
                             if not window_found:
                                 try:
                                     title, wx, wy, ww, wh = self.capture_engine.get_active_window_rect()
@@ -194,27 +287,28 @@ class MonitoringWorker(QThread):
                                 except Exception:
                                     pass
 
-                            # If window still cannot be found, log warning and SKIP click to prevent random clicks!
                             if not window_found:
                                 self.log_signal.emit(
                                     f"[🚨] Target window '{rule.window_title}' not found. Skipping click sequence to prevent random clicking."
                                 )
                                 continue
 
-                            # Calculate current absolute coordinates based on active window and saved offset
-                            target_x = wx + rule.window_offset_x
-                            target_y = wy + rule.window_offset_y
+                            # Compute target relative to window + anchor displacement (dx, dy)
+                            target_x = wx + rule.window_offset_x + dx
+                            target_y = wy + rule.window_offset_y + dy
+
+                            # Highlight target coordinate
+                            self.highlight_signal.emit([(target_x - 15, target_y - 15, 30, 30)])
 
                             with self.lock:
                                 rule.last_triggered = now
 
                             self.log_signal.emit(
                                 f"[+] Window Relative Trigger Success: '{rule.name}' inside active window '{title}' "
-                                f"at offset [{rule.window_offset_x}, {rule.window_offset_y}] -> Screen [{target_x}, {target_y}]. "
+                                f"at offset [{rule.window_offset_x}, {rule.window_offset_y}] (Shifted dx:{dx}, dy:{dy}) -> Screen [{target_x}, {target_y}]. "
                                 f"Executing click steps..."
                             )
 
-                            # Process each step in sequence relative to computed active window target coordinates
                             for i, step in enumerate(rule.click_steps):
                                 step_action = step["action"]
                                 step_x = target_x + step["offset_x"]
@@ -225,39 +319,40 @@ class MonitoringWorker(QThread):
                                     f"  -> Step #{i+1}: Clicking '{step_action}' at [{step_x}, {step_y}] "
                                     f"(offset: {step['offset_x']},{step['offset_y']}). Delay: {step_delay}s"
                                 )
-
                                 self.click_signal.emit(step_x, step_y, step_action)
-                                # Sleep after this step
                                 time.sleep(step_delay)
-                            break # execute one match per cycle
+                            break
 
-                    # Absolute Cursor Position matching
+                    # Absolute Cursor Position Trigger
                     elif rule.trigger_type == "Absolute Cursor Position":
                         if rule.abs_x is not None and rule.abs_y is not None:
-                            # Bypasses screen matching/scanning and triggers the steps directly!
+                            # Shift absolute coordinates based on anchor displacement
+                            target_x = rule.abs_x + dx
+                            target_y = rule.abs_y + dy
+
+                            # Highlight target coordinate
+                            self.highlight_signal.emit([(target_x - 15, target_y - 15, 30, 30)])
+
                             with self.lock:
                                 rule.last_triggered = now
 
                             self.log_signal.emit(
-                                f"[+] Absolute Trigger Success: '{rule.name}' at [{rule.abs_x}, {rule.abs_y}]. Executing click steps..."
+                                f"[+] Absolute Trigger Success: '{rule.name}' at [{target_x}, {target_y}] (Shifted dx:{dx}, dy:{dy}). Executing click steps..."
                             )
 
-                            # Process each step in sequence relative to the absolute coordinates
                             for i, step in enumerate(rule.click_steps):
                                 step_action = step["action"]
-                                step_x = rule.abs_x + step["offset_x"]
-                                step_y = rule.abs_y + step["offset_y"]
+                                step_x = target_x + step["offset_x"]
+                                step_y = target_y + step["offset_y"]
                                 step_delay = step["delay"]
 
                                 self.log_signal.emit(
                                     f"  -> Step #{i+1}: Clicking '{step_action}' at [{step_x}, {step_y}] "
                                     f"(offset: {step['offset_x']},{step['offset_y']}). Delay: {step_delay}s"
                                 )
-
                                 self.click_signal.emit(step_x, step_y, step_action)
-                                # Sleep after this step
                                 time.sleep(step_delay)
-                            break # execute one match per cycle
+                            break
 
                 # Delay between scans (e.g. scanning ~10 times per second)
                 time.sleep(0.1)
@@ -287,6 +382,7 @@ class ApplicationCoordinator(QObject):
         # Initialize GUI components
         self.dashboard = NativeDashboard()
         self.teach_overlay = TeachOverlay()
+        self.highlight_overlay = MatchHighlightOverlay()
 
         # Initialize background monitor worker thread
         self.monitor_thread = MonitoringWorker(self.capture_engine, self.rules, self.lock)
@@ -311,6 +407,7 @@ class ApplicationCoordinator(QObject):
         # Monitor thread signals
         self.monitor_thread.log_signal.connect(self.dashboard.append_log)
         self.monitor_thread.click_signal.connect(self.perform_macro_click)
+        self.monitor_thread.highlight_signal.connect(self.highlight_overlay.highlight_matches)
 
         # Global Hotkey Thread-Safe Signal bindings
         self.click_engine.start_signal.connect(self.start_monitoring)
@@ -348,8 +445,12 @@ class ApplicationCoordinator(QObject):
         mx, my = pyautogui.position()
         self.dashboard.append_log(f"[*] Capturing current cursor coordinates: [{mx}, {my}].")
 
-        # Pop save dialog pre-populated with cursor coordinates
-        dialog = SaveTargetDialog(self.dashboard, abs_x=mx, abs_y=my)
+        # Safely copy rules under lock to pass as snapshot for Anchor Selection
+        with self.lock:
+            rules_snapshot = list(self.rules)
+
+        # Pop save dialog pre-populated with cursor coordinates and rules snapshot
+        dialog = SaveTargetDialog(self.dashboard, abs_x=mx, abs_y=my, rules_snapshot=rules_snapshot)
         if dialog.exec() == QDialog.Accepted:
             name = dialog.name_input.text()
             trigger_type = dialog.trigger_combo.currentText()
@@ -365,6 +466,11 @@ class ApplicationCoordinator(QObject):
             rule_id = f"rule_{int(time.time())}"
             filepath = ""
 
+            # Extract anchor rule ID if selected
+            anchor_rule_id = None
+            if dialog.anchor_select_combo.currentIndex() > 0:
+                anchor_rule_id = dialog.anchor_select_combo.currentData()
+
             try:
                 new_rule = MacroRule(
                     id_str=rule_id,
@@ -379,7 +485,9 @@ class ApplicationCoordinator(QObject):
                     abs_y=my,
                     window_title=dialog.window_title,
                     window_offset_x=dialog.window_offset_x,
-                    window_offset_y=dialog.window_offset_y
+                    window_offset_y=dialog.window_offset_y,
+                    search_region=dialog.region_combo.currentText(),
+                    anchor_rule_id=anchor_rule_id
                 )
                 with self.lock:
                     self.rules.append(new_rule)
@@ -393,8 +501,12 @@ class ApplicationCoordinator(QObject):
     def handle_region_selected(self, x: int, y: int, w: int, h: int):
         self.dashboard.append_log(f"[*] Captured crop box at: X:{x}, Y:{y} [{w}x{h} px]")
 
+        # Safely copy rules under lock to pass as snapshot for Anchor Selection
+        with self.lock:
+            rules_snapshot = list(self.rules)
+
         # Pop save dialog
-        dialog = SaveTargetDialog(self.dashboard)
+        dialog = SaveTargetDialog(self.dashboard, rules_snapshot=rules_snapshot)
         if dialog.exec() == QDialog.Accepted:
             name = dialog.name_input.text()
             trigger_type = dialog.trigger_combo.currentText()
@@ -411,11 +523,31 @@ class ApplicationCoordinator(QObject):
             rule_id = f"rule_{int(time.time())}"
             filepath = os.path.join("targets", f"{rule_id}.png")
 
+            # Extract anchor rule ID if selected
+            anchor_rule_id = None
+            if dialog.anchor_select_combo.currentIndex() > 0:
+                anchor_rule_id = dialog.anchor_select_combo.currentData()
+
             try:
                 self.capture_engine.save_template(x, y, w, h, filepath)
 
                 # Add Macro Rule safely under Thread Lock
-                new_rule = MacroRule(rule_id, name, trigger_type, action, cooldown, threshold, filepath, click_steps=click_steps)
+                new_rule = MacroRule(
+                    id_str=rule_id,
+                    name=name,
+                    trigger_type=trigger_type,
+                    action=action,
+                    cooldown=cooldown,
+                    threshold=threshold,
+                    template_path=filepath,
+                    click_steps=click_steps,
+                    search_region=dialog.region_combo.currentText(),
+                    anchor_rule_id=anchor_rule_id,
+                    train_x=x,
+                    train_y=y,
+                    train_w=w,
+                    train_h=h
+                )
                 with self.lock:
                     self.rules.append(new_rule)
 

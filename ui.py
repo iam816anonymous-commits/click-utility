@@ -8,6 +8,48 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QPainter, QPen, QColor, QFont
 
+class MatchHighlightOverlay(QWidget):
+    """
+    Frameless transparent click-through overlay to temporarily draw green target highlights
+    on-screen over matched locations.
+    """
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.WindowTransparentForInput)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.rects = []
+        self.clear_timer = QTimer(self)
+        self.clear_timer.setSingleShot(True)
+        self.clear_timer.timeout.connect(self.clear_highlights)
+
+    def highlight_matches(self, rects: list):
+        """
+        Expects rects to be a list of Tuples (x, y, w, h)
+        """
+        screen = QApplication.primaryScreen()
+        self.setGeometry(screen.geometry())
+        self.rects = rects
+        self.show()
+        self.update()
+        self.clear_timer.start(1500)
+
+    def clear_highlights(self):
+        self.rects = []
+        self.hide()
+
+    def paintEvent(self, event):
+        if not self.rects:
+            return
+        painter = QPainter(self)
+        pen = QPen(QColor(16, 185, 129), 3) # Emerald green box outline
+        painter.setPen(pen)
+        painter.setBrush(QColor(16, 185, 129, 30)) # Translucent fill
+
+        for (x, y, w, h) in self.rects:
+            painter.drawRect(x, y, w, h)
+
+
 class TeachOverlay(QWidget):
     """
     Full-screen semi-transparent overlay to select a custom crop region for visual targets.
@@ -194,17 +236,18 @@ class CapturePositionOverlay(QWidget):
 class SaveTargetDialog(QDialog):
     """
     Modal window to name and configure the newly captured template target.
-    Integrated with a production-grade Coordinate Capture System.
+    Integrated with a production-grade Coordinate Capture System, region locking, and anchors.
     """
     # Shared coordinate capture history across all dialog instantiations
     RECENT_CAPTURES = []
 
-    def __init__(self, parent=None, abs_x: int = None, abs_y: int = None):
+    def __init__(self, parent=None, abs_x: int = None, abs_y: int = None, rules_snapshot: list = None):
         super().__init__(parent)
         self.setWindowTitle("Save Macro Automation Rule")
-        self.resize(650, 750)
+        self.resize(650, 800)
         self.abs_x = abs_x
         self.abs_y = abs_y
+        self.rules_snapshot = rules_snapshot if rules_snapshot is not None else []
         self.window_title = None
         self.window_offset_x = None
         self.window_offset_y = None
@@ -237,6 +280,26 @@ class SaveTargetDialog(QDialog):
         self.trigger_combo.addItems(["Image Template Match", "OCR Text Match", "Absolute Cursor Position", "Window-Relative Position"])
         self.trigger_combo.currentTextChanged.connect(self.handle_trigger_changed)
         layout.addWidget(self.trigger_combo)
+
+        # --- Region Locking and Anchoring Panel (Only for Template / Visual Matches) ---
+        self.visual_settings_group = QGroupBox("Search Region & Anchor Tracking Settings")
+        v_layout = QVBoxLayout(self.visual_settings_group)
+
+        # Region Locking dropdown
+        v_layout.addWidget(QLabel("<b>Search Region Locking:</b>"))
+        self.region_combo = QComboBox()
+        self.region_combo.addItems(["Entire Screen", "Active Window Only", "Trained Region Only"])
+        v_layout.addWidget(self.region_combo)
+
+        # Anchor selection dropdown
+        v_layout.addWidget(QLabel("<b>Anchor Rule for Relative Offset (Optional):</b>"))
+        self.anchor_select_combo = QComboBox()
+        self.anchor_select_combo.addItem("None (Independent)")
+        for r in self.rules_snapshot:
+            self.anchor_select_combo.addItem(f"{r.name} ({r.id_str})", r.id_str)
+        v_layout.addWidget(self.anchor_select_combo)
+
+        layout.addWidget(self.visual_settings_group)
 
         # --- Coordinate Capture Panel ---
         self.coord_group = QGroupBox("Coordinate Capture System")
@@ -358,10 +421,12 @@ class SaveTargetDialog(QDialog):
     def handle_trigger_changed(self, text: str):
         # Only show the coordinate capturing panel when using coordinate modes
         is_coord = text in ["Absolute Cursor Position", "Window-Relative Position"]
+        is_visual = text in ["Image Template Match", "OCR Text Match"]
         self.coord_group.setVisible(is_coord)
-        self.conf_lbl_title.setVisible(not is_coord)
-        self.conf_slider.setVisible(not is_coord)
-        self.conf_label.setVisible(not is_coord)
+        self.visual_settings_group.setVisible(is_visual)
+        self.conf_lbl_title.setVisible(is_visual)
+        self.conf_slider.setVisible(is_visual)
+        self.conf_label.setVisible(is_visual)
 
     def populate_recent_combo(self):
         self.recent_combo.clear()
