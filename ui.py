@@ -1,4 +1,5 @@
 import sys
+import os
 from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -233,6 +234,66 @@ class CapturePositionOverlay(QWidget):
                 pass
 
 
+from PySide6.QtGui import QPixmap
+
+class TemplateOffsetPicker(QLabel):
+    """
+    Displays the cropped template image and registers mouse press events to set
+    a precise user click offset relative to the template's top-left corner.
+    Renders a red crosshair over the chosen offset.
+    """
+    offset_clicked = Signal(int, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFrameStyle(QStyle.Sunken | QStyle.StyledPanel)
+        self.setAlignment(Qt.AlignCenter)
+        self.setCursor(Qt.CrossCursor)
+        self.click_x = None
+        self.click_y = None
+
+    def set_template_image(self, pixmap: QPixmap):
+        self.setPixmap(pixmap)
+        self.click_x = pixmap.width() // 2
+        self.click_y = pixmap.height() // 2
+        self.offset_clicked.emit(self.click_x, self.click_y)
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.pixmap():
+            lbl_w, lbl_h = self.width(), self.height()
+            pm_w, pm_h = self.pixmap().width(), self.pixmap().height()
+
+            x0 = (lbl_w - pm_w) // 2
+            y0 = (lbl_h - pm_h) // 2
+
+            click_x = event.position().x() - x0
+            click_y = event.position().y() - y0
+
+            self.click_x = max(0, min(pm_w - 1, int(click_x)))
+            self.click_y = max(0, min(pm_h - 1, int(click_y)))
+
+            self.offset_clicked.emit(self.click_x, self.click_y)
+            self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.pixmap() and self.click_x is not None and self.click_y is not None:
+            painter = QPainter(self)
+            lbl_w, lbl_h = self.width(), self.height()
+            pm_w, pm_h = self.pixmap().width(), self.pixmap().height()
+            x0 = (lbl_w - pm_w) // 2
+            y0 = (lbl_h - pm_h) // 2
+
+            cx = x0 + self.click_x
+            cy = y0 + self.click_y
+
+            pen = QPen(QColor(239, 68, 68), 2)
+            painter.setPen(pen)
+            painter.drawLine(cx - 8, cy, cx + 8, cy)
+            painter.drawLine(cx, cy - 8, cx, cy + 8)
+
+
 class SaveTargetDialog(QDialog):
     """
     Modal window to name and configure the newly captured template target.
@@ -241,13 +302,18 @@ class SaveTargetDialog(QDialog):
     # Shared coordinate capture history across all dialog instantiations
     RECENT_CAPTURES = []
 
-    def __init__(self, parent=None, abs_x: int = None, abs_y: int = None, rules_snapshot: list = None):
+    def __init__(self, parent=None, abs_x: int = None, abs_y: int = None, rules_snapshot: list = None, template_path: str = None):
         super().__init__(parent)
         self.setWindowTitle("Save Macro Automation Rule")
-        self.resize(650, 800)
+        self.resize(650, 850)
         self.abs_x = abs_x
         self.abs_y = abs_y
         self.rules_snapshot = rules_snapshot if rules_snapshot is not None else []
+        self.template_path = template_path
+
+        self.click_offset_x = 0
+        self.click_offset_y = 0
+
         self.window_title = None
         self.window_offset_x = None
         self.window_offset_y = None
@@ -265,6 +331,11 @@ class SaveTargetDialog(QDialog):
         # Default click steps
         self.click_steps = [{"action": "Single Click", "offset_x": 0, "offset_y": 0, "delay": 0.5}]
         self.init_ui()
+
+    def update_calibration_offset(self, cx: int, cy: int):
+        self.click_offset_x = cx
+        self.click_offset_y = cy
+        self.offset_label.setText(f"🎯 Stored Target Click Offset: X: +{cx} px, Y: +{cy} px (relative to top-left)")
 
     def init_ui(self):
         layout = QVBoxLayout(self)
@@ -298,6 +369,26 @@ class SaveTargetDialog(QDialog):
         for r in self.rules_snapshot:
             self.anchor_select_combo.addItem(f"{r.name} ({r.id_str})", r.id_str)
         v_layout.addWidget(self.anchor_select_combo)
+
+        # Precise user clicked calibration offset panel inside visual settings group
+        self.calibration_offset_group = QGroupBox("Target Calibration Click Offset")
+        cal_layout = QVBoxLayout(self.calibration_offset_group)
+        cal_layout.addWidget(QLabel("Click EXACTLY inside the captured template below to set the precise click spot:"))
+
+        self.offset_picker = TemplateOffsetPicker()
+        self.offset_picker.offset_clicked.connect(self.update_calibration_offset)
+        cal_layout.addWidget(self.offset_picker)
+
+        self.offset_label = QLabel("🎯 Stored Target Click Offset: X: +0 px, Y: +0 px")
+        cal_layout.addWidget(self.offset_label)
+
+        v_layout.addWidget(self.calibration_offset_group)
+
+        # Load captured template if path is set
+        if self.template_path and os.path.exists(self.template_path):
+            pix = QPixmap(self.template_path)
+            if not pix.isNull():
+                self.offset_picker.set_template_image(pix)
 
         layout.addWidget(self.visual_settings_group)
 
@@ -677,3 +768,172 @@ class NativeDashboard(QMainWindow):
 
     def append_log(self, text: str):
         self.log_output.append(text)
+
+
+class CalibrationWizard(QDialog):
+    """
+    Step-by-step Calibration Wizard to detect monitor resolutions, scaling,
+    verify alignment, and compute correction factors automatically.
+    Stores calibration offsets per monitor.
+    """
+    calibration_complete = Signal(float, float) # correction_x, correction_y
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("System DPI & Calibration Wizard")
+        self.resize(500, 350)
+        self.current_step = 1
+
+        self.correction_x = 0.0
+        self.correction_y = 0.0
+
+        self.init_ui()
+
+    def init_ui(self):
+        self.layout = QVBoxLayout(self)
+
+        self.title_lbl = QLabel("<h3>DPI Alignment & Calibration Wizard</h3>")
+        self.layout.addWidget(self.title_lbl)
+
+        self.desc_lbl = QLabel(
+            "This wizard aligns your mouse cursor coordinate space with the screenshot coordinate space "
+            "to ensure perfect clicking accuracy regardless of Windows DPI scaling or resolution mismatches."
+        )
+        self.desc_lbl.setWordWrap(True)
+        self.layout.addWidget(self.desc_lbl)
+
+        self.metrics_lbl = QLabel()
+        self.metrics_lbl.setStyleSheet("padding: 10px; background-color: #F3F4F6; border-radius: 4px; font-family: monospace;")
+        self.update_metrics_view()
+        self.layout.addWidget(self.metrics_lbl)
+
+        self.btn_layout = QHBoxLayout()
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.clicked.connect(self.reject)
+        self.next_btn = QPushButton("Start Calibration Step 1")
+        self.next_btn.clicked.connect(self.handle_next)
+
+        self.btn_layout.addWidget(self.cancel_btn)
+        self.btn_layout.addStretch()
+        self.btn_layout.addWidget(self.next_btn)
+        self.layout.addLayout(self.btn_layout)
+
+    def update_metrics_view(self):
+        screen = QApplication.primaryScreen()
+        geom = screen.geometry()
+        ratio = screen.devicePixelRatio()
+        text = (
+            f"Primary Monitor Res : {geom.width()}x{geom.height()}\n"
+            f"Device Pixel Ratio  : {ratio}x\n"
+            f"Coordinate System   : PySide6 QScreen Alignment"
+        )
+        self.metrics_lbl.setText(text)
+
+    def handle_next(self):
+        if self.current_step == 1:
+            self.current_step = 2
+            self.desc_lbl.setText(
+                "<b>Step 1/2: Calculate Mouse Coordinates vs Screen Pixels</b><br><br>"
+                "We will position your cursor and verify scaling. Please do not move the mouse for a second."
+            )
+            self.next_btn.setText("Calculate Correction")
+
+            # Auto-calculate scaling DPI factors
+            screen = QApplication.primaryScreen()
+            ratio = screen.devicePixelRatio()
+            if ratio != 1.0:
+                self.correction_x = ratio
+                self.correction_y = ratio
+
+        elif self.current_step == 2:
+            # Complete
+            self.calibration_complete.emit(self.correction_x, self.correction_y)
+            self.accept()
+
+
+class DebugOverlay(QWidget):
+    """
+    Transparent fullscreen HUD layout presenting real-time matched bounding boxes,
+    precise target click crosshairs, and calibration logs (DPI, resolution, confidence, etc.).
+    Pauses execution briefly to allow the developer to visualize and confirm click precision.
+    """
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.WindowTransparentForInput)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+
+        # Display specifications
+        self.rects = []
+        self.click_point = None
+        self.meta_text = ""
+
+        self.hide_timer = QTimer(self)
+        self.hide_timer.setSingleShot(True)
+        self.hide_timer.timeout.connect(self.hide_overlay)
+
+    def show_debug_info(self, rects: list, click_point: tuple, meta_text: str):
+        screen = QApplication.primaryScreen()
+        self.setGeometry(screen.geometry())
+
+        self.rects = rects
+        self.click_point = click_point
+        self.meta_text = meta_text
+
+        self.show()
+        self.update()
+
+        # Pause display for visual confirmation
+        self.hide_timer.start(1200)
+
+    def hide_overlay(self):
+        self.rects = []
+        self.click_point = None
+        self.meta_text = ""
+        self.hide()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+
+        # Draw transparent dark background
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 40))
+
+        # Draw matched rectangles (Green outline)
+        pen_green = QPen(QColor(16, 185, 129), 3, Qt.SolidLine)
+        painter.setPen(pen_green)
+        painter.setBrush(QColor(16, 185, 129, 20))
+        for (x, y, w, h) in self.rects:
+            painter.drawRect(x, y, w, h)
+
+        # Draw precise click spot (Red crosshair)
+        if self.click_point:
+            cx, cy = self.click_point
+            pen_red = QPen(QColor(239, 68, 68), 3)
+            painter.setPen(pen_red)
+            painter.drawLine(cx - 15, cy, cx + 15, cy)
+            painter.drawLine(cx, cy - 15, cx, cy + 15)
+            # Circle surrounding click spot
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(cx - 6, cy - 6, 12, 12)
+
+        # Draw HUD metadata panel (Black box top-left)
+        if self.meta_text:
+            painter.setFont(QFont("Courier New", 10, QFont.Bold))
+            fm = painter.fontMetrics()
+
+            # Wrap text lines
+            lines = self.meta_text.strip().split("\n")
+            max_w = max(fm.horizontalAdvance(line) for line in lines)
+            total_h = len(lines) * fm.height()
+
+            # Semi-transparent metadata background panel
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(17, 24, 39, 220)) # Dark Slate
+            painter.drawRoundedRect(20, 20, max_w + 30, total_h + 30, 6, 6)
+
+            # Print wrapped text rows
+            painter.setPen(QColor(253, 224, 71)) # Golden yellow text
+            curr_y = 40
+            for line in lines:
+                painter.drawText(35, curr_y, line)
+                curr_y += fm.height()

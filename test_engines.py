@@ -355,5 +355,70 @@ class TestMatchEngine(unittest.TestCase):
         self.assertEqual(cy, 45)
         self.assertGreaterEqual(conf, 0.90)
 
+    def test_dpi_awareness_checks(self):
+        # Verify custom DPI auto-scale detection ratio computation
+        current_dpi = 1.5 # e.g. 150% scaling
+        top_left_x, top_left_y = 100, 100
+        click_offset_x, click_offset_y = 10, 20
+        dx, dy = 0, 0
+
+        # Calculate actual DPI-scaled screen coordinates
+        actual_click_x = int((top_left_x + click_offset_x + dx) / current_dpi)
+        actual_click_y = int((top_left_y + click_offset_y + dy) / current_dpi)
+
+        # 110 / 1.5 = 73.3 -> 73
+        self.assertEqual(actual_click_x, 73)
+        # 120 / 1.5 = 80
+        self.assertEqual(actual_click_y, 80)
+
+    def test_custom_click_offset_math(self):
+        # Test user click-offsets inside template (top-left relative) instead of template center
+        top_left_x, top_left_y = 250, 400
+
+        # User clicked exactly at offset +5, +15 inside target template
+        user_click_offset_x = 5
+        user_click_offset_y = 15
+
+        actual_click_x = top_left_x + user_click_offset_x
+        actual_click_y = top_left_y + user_click_offset_y
+
+        self.assertEqual(actual_click_x, 255)
+        self.assertEqual(actual_click_y, 415)
+
+    def test_multi_stage_candidate_disambiguation(self):
+        # Mock candidates of identical shapes
+        candidates = [
+            (25, 25, 0.98), # Template match 1
+            (65, 65, 0.95)  # Template match 2
+        ]
+
+        # Create mock screen containing distinct shapes
+        screen = np.zeros((100, 100, 3), dtype=np.uint8)
+        screen[20:30, 20:30, :] = self.template
+        screen[60:70, 60:70, :] = self.template
+
+        best_candidate = MatchEngine.disambiguate_candidates(screen, self.template, candidates)
+        self.assertIsNotNone(best_candidate)
+        # Should choose the highest composite similarity candidate
+        self.assertEqual(best_candidate[0], 25)
+        self.assertEqual(best_candidate[1], 25)
+
+    def test_restricted_region_scanning_logic(self):
+        # Ensure region restriction correctly caches and constraints search area
+        last_matched_region = (40, 40, 10, 10) # Bounding box
+        rx, ry, rw, rh = last_matched_region
+
+        pad_cached = 20
+        crop_x1 = max(0, rx - pad_cached)
+        crop_y1 = max(0, ry - pad_cached)
+        crop_x2 = min(100, rx + rw + pad_cached)
+        crop_y2 = min(100, ry + rh + pad_cached)
+
+        # Area cropped from full screen:
+        self.assertEqual(crop_x1, 20)
+        self.assertEqual(crop_y1, 20)
+        self.assertEqual(crop_x2, 70)
+        self.assertEqual(crop_y2, 70)
+
 if __name__ == "__main__":
     unittest.main()

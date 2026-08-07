@@ -16,7 +16,7 @@ class MacroRule:
     """
     Data model representing a visual macro click rule.
     """
-    def __init__(self, id_str: str, name: str, trigger_type: str, action: str, cooldown: float, threshold: float, template_path: str, click_steps: list = None, abs_x: int = None, abs_y: int = None, window_title: str = None, window_offset_x: int = None, window_offset_y: int = None, window_handle: int = None, countdown_delay: int = None, coordinate_history: list = None, search_region: str = "Entire Screen", anchor_rule_id: str = None, train_x: int = None, train_y: int = None, train_w: int = None, train_h: int = None, use_edges: bool = False):
+    def __init__(self, id_str: str, name: str, trigger_type: str, action: str, cooldown: float, threshold: float, template_path: str, click_steps: list = None, abs_x: int = None, abs_y: int = None, window_title: str = None, window_offset_x: int = None, window_offset_y: int = None, window_handle: int = None, countdown_delay: int = None, coordinate_history: list = None, search_region: str = "Entire Screen", anchor_rule_id: str = None, train_x: int = None, train_y: int = None, train_w: int = None, train_h: int = None, use_edges: bool = False, click_offset_x: int = None, click_offset_y: int = None, window_client_w: int = None, window_client_h: int = None, dpi_scale: float = 1.0, calibration_correction_x: float = 0.0, calibration_correction_y: float = 0.0):
         self.id_str = id_str
         self.name = name
         self.trigger_type = trigger_type
@@ -39,6 +39,23 @@ class MacroRule:
         self.train_w = train_w
         self.train_h = train_h
         self.use_edges = use_edges
+
+        # User defined click calibration offset within template (top-left relative)
+        self.click_offset_x = click_offset_x
+        self.click_offset_y = click_offset_y
+
+        # Stored original window/screen states for calibration
+        self.window_client_w = window_client_w
+        self.window_client_h = window_client_h
+        self.dpi_scale = dpi_scale
+
+        # Stored calibration wizard correction offsets
+        self.calibration_correction_x = calibration_correction_x
+        self.calibration_correction_y = calibration_correction_y
+
+        # Cache for localized restricted regions
+        self.last_matched_region = None # Tuple of (x, y, w, h)
+
         self.active = True
         self.last_triggered = 0.0
 
@@ -62,6 +79,7 @@ class MonitoringWorker(QThread):
     log_signal = Signal(str)
     click_signal = Signal(int, int, str) # x, y, action
     highlight_signal = Signal(list) # list of Tuples (x, y, w, h)
+    debug_overlay_signal = Signal(list, tuple, str) # rects, click_point, meta_text
 
     def __init__(self, capture_engine: CaptureEngine, rules: list[MacroRule], lock: threading.Lock):
         super().__init__()
@@ -76,6 +94,7 @@ class MonitoringWorker(QThread):
 
         while self.running:
             try:
+                start_time_cycle = time.time()
                 # Capture full screen using MSS
                 screen = self.capture_engine.capture_full_screen()
                 now = time.time()
@@ -93,11 +112,23 @@ class MonitoringWorker(QThread):
                     if now - rule.last_triggered < rule.cooldown:
                         continue
 
+                    # Auto-detect current scaling and screen resolution
+                    screen_w, screen_h = screen.shape[1], screen.shape[0]
+
+                    # DPI Scale detection fallback
+                    current_dpi = 1.0
+                    try:
+                        # Auto-compute scaling ratio dynamically if mismatch is detected
+                        primary_screen = QApplication.primaryScreen()
+                        if primary_screen:
+                            current_dpi = primary_screen.devicePixelRatio()
+                    except Exception:
+                        pass
+
                     # Initialize anchor displacement
                     dx, dy = 0, 0
                     anchor_found = False
                     if rule.anchor_rule_id:
-                        # Find the anchor rule in active_rules_snapshot
                         anchor_rule = None
                         for r in active_rules_snapshot:
                             if r.id_str == rule.anchor_rule_id:
@@ -107,23 +138,18 @@ class MonitoringWorker(QThread):
                         if anchor_rule and os.path.exists(anchor_rule.template_path):
                             anchor_temp = cv2.imread(anchor_rule.template_path, cv2.IMREAD_COLOR)
                             if anchor_temp is not None:
-                                # Match anchor on screen
                                 anchor_match = MatchEngine.match_template(screen, anchor_temp, threshold=anchor_rule.threshold, use_edges=anchor_rule.use_edges)
                                 if anchor_match:
                                     acx, acy, aconf = anchor_match
-                                    # Anchor training center
                                     atcx = anchor_rule.train_x + anchor_rule.train_w // 2
                                     atcy = anchor_rule.train_y + anchor_rule.train_h // 2
                                     dx = acx - atcx
                                     dy = acy - atcy
                                     anchor_found = True
-                                    # Highlight anchor template
                                     ahw, ahh = anchor_temp.shape[1], anchor_temp.shape[0]
                                     self.highlight_signal.emit([(acx - ahw//2, acy - ahh//2, ahw, ahh)])
 
-                    # If anchor rule ID is set but anchor not found, skip/warn to be safe
                     if rule.anchor_rule_id and not anchor_found:
-                        # Throttled logging
                         if not hasattr(rule, "last_anchor_missing_log"):
                             rule.last_anchor_missing_log = 0.0
                         if now - rule.last_anchor_missing_log > 5.0:
@@ -131,42 +157,64 @@ class MonitoringWorker(QThread):
                             self.log_signal.emit(f"[⚠️] Anchor rule for '{rule.name}' not found on screen. Skipping dependent rule.")
                         continue
 
-                    # Determine Search Region
-                    # We crop screen to the defined search region before passing to matching
+                    # Determine Search Region with RESTRICTED REGION caching
                     crop_x1, crop_y1 = 0, 0
                     search_area = screen
 
-                    if rule.search_region == "Active Window Only":
-                        title, wx, wy, ww, wh = self.capture_engine.get_active_window_rect()
-                        # Allow headless tests bypass
-                        if "Headless" not in title:
-                            crop_x1 = max(0, wx)
-                            crop_y1 = max(0, wy)
-                            crop_x2 = min(screen.shape[1], wx + ww)
-                            crop_y2 = min(screen.shape[0], wy + wh)
-                            if crop_x2 > crop_x1 and crop_y2 > crop_y1:
-                                search_area = screen[crop_y1:crop_y2, crop_x1:crop_x2]
-                            else:
-                                continue # Invalid active window bounds
+                    # If region caching is active and target was previously found, restrict search to localized region
+                    if rule.last_matched_region:
+                        rx, ry, rw, rh = rule.last_matched_region
+                        # Pad region slightly
+                        pad_cached = 40
+                        crop_x1 = max(0, rx - pad_cached)
+                        crop_y1 = max(0, ry - pad_cached)
+                        crop_x2 = min(screen_w, rx + rw + pad_cached)
+                        crop_y2 = min(screen_h, ry + rh + pad_cached)
+                        if crop_x2 > crop_x1 and crop_y2 > crop_y1:
+                            search_area = screen[crop_y1:crop_y2, crop_x1:crop_x2]
+                    else:
+                        # Fallback to standard designated regions
+                        if rule.search_region == "Active Window Only":
+                            title, wx, wy, ww, wh = self.capture_engine.get_active_window_rect()
 
-                    elif rule.search_region == "Trained Region Only":
-                        if rule.train_x is not None and rule.train_y is not None:
-                            # Apply anchor displacement to trained region coordinates
-                            tx = rule.train_x + dx
-                            ty = rule.train_y + dy
-                            tw = rule.train_w
-                            th = rule.train_h
+                            # Calibrate client size changes
+                            if rule.window_client_w and rule.window_client_h:
+                                size_diff_pct = abs(ww - rule.window_client_w) / rule.window_client_w
+                                if size_diff_pct > 0.05:
+                                    self.log_signal.emit(
+                                        f"[⚠️] Calibration Alert: Target window size changed by {size_diff_pct*100:.1f}%. "
+                                        f"Scaling stored offsets dynamically to align."
+                                    )
+                                    scale_ratio = ww / rule.window_client_w
+                                    dx = int(dx * scale_ratio)
+                                    dy = int(dy * scale_ratio)
 
-                            # Pad slightly
-                            pad = 30
-                            crop_x1 = max(0, tx - pad)
-                            crop_y1 = max(0, ty - pad)
-                            crop_x2 = min(screen.shape[1], tx + tw + pad)
-                            crop_y2 = min(screen.shape[0], ty + th + pad)
-                            if crop_x2 > crop_x1 and crop_y2 > crop_y1:
-                                search_area = screen[crop_y1:crop_y2, crop_x1:crop_x2]
-                            else:
-                                continue
+                            if "Headless" not in title:
+                                crop_x1 = max(0, wx)
+                                crop_y1 = max(0, wy)
+                                crop_x2 = min(screen_w, wx + ww)
+                                crop_y2 = min(screen_h, wy + wh)
+                                if crop_x2 > crop_x1 and crop_y2 > crop_y1:
+                                    search_area = screen[crop_y1:crop_y2, crop_x1:crop_x2]
+                                else:
+                                    continue
+
+                        elif rule.search_region == "Trained Region Only":
+                            if rule.train_x is not None and rule.train_y is not None:
+                                tx = rule.train_x + dx
+                                ty = rule.train_y + dy
+                                tw = rule.train_w
+                                th = rule.train_h
+
+                                pad = 30
+                                crop_x1 = max(0, tx - pad)
+                                crop_y1 = max(0, ty - pad)
+                                crop_x2 = min(screen_w, tx + tw + pad)
+                                crop_y2 = min(screen_h, ty + th + pad)
+                                if crop_x2 > crop_x1 and crop_y2 > crop_y1:
+                                    search_area = screen[crop_y1:crop_y2, crop_x1:crop_x2]
+                                else:
+                                    continue
 
                     # Image Template Match Trigger
                     if rule.trigger_type == "Image Template Match":
@@ -182,7 +230,6 @@ class MonitoringWorker(QThread):
                         for attempt in range(3):
                             if attempt > 0:
                                 time.sleep(0.2)
-                                # Recapture screen area during retry to allow target recovery
                                 latest_screen = self.capture_engine.capture_full_screen()
                                 if rule.search_region == "Active Window Only":
                                     title, wx, wy, ww, wh = self.capture_engine.get_active_window_rect()
@@ -196,41 +243,77 @@ class MonitoringWorker(QThread):
                                 else:
                                     search_area = latest_screen
 
-                            matches = MatchEngine.match_template_multi(search_area, template, threshold=rule.threshold, use_edges=rule.use_edges)
-                            if matches:
-                                break
+                            raw_matches = MatchEngine.match_template_multi(search_area, template, threshold=rule.threshold, use_edges=rule.use_edges)
 
-                        if len(matches) > 1:
-                            # Highlight all matches
-                            th, tw = template.shape[:2]
-                            rects = []
-                            for (cx, cy, conf) in matches:
-                                rects.append((cx + crop_x1 - tw//2, cy + crop_y1 - th//2, tw, th))
-                            self.highlight_signal.emit(rects)
+                            # Similar UI Disambiguation: choose candidate with highest composite edges+colors similarity score
+                            if raw_matches:
+                                best_match = MatchEngine.disambiguate_candidates(search_area, template, raw_matches)
+                                if best_match:
+                                    matches = [best_match]
+                                    break
 
-                            # Update stats
-                            with self.lock:
-                                rule.failures_count += 1
-
-                            # Warning & Skip
-                            if not hasattr(rule, "last_multi_match_log"):
-                                rule.last_multi_match_log = 0.0
-                            if now - rule.last_multi_match_log > 3.0:
-                                rule.last_multi_match_log = now
-                                self.log_signal.emit(
-                                    f"[⚠️] Multiple distinct matches ({len(matches)}) found for '{rule.name}'. "
-                                    f"Skipping click sequence to prevent random clicking."
-                                )
-                            continue
-
-                        elif len(matches) == 1:
+                        if len(matches) == 1:
                             cx, cy, conf = matches[0]
                             best_x = cx + crop_x1
                             best_y = cy + crop_y1
 
                             th, tw = template.shape[:2]
-                            # Emit highlight for the match
-                            self.highlight_signal.emit([(best_x - tw//2, best_y - th//2, tw, th)])
+
+                            # Store/Cache Restricted Match Region
+                            with self.lock:
+                                rule.last_matched_region = (best_x - tw//2, best_y - th//2, tw, th)
+
+                            # Calculate calibration-based actual click point
+                            top_left_x = best_x - tw // 2
+                            top_left_y = best_y - th // 2
+
+                            click_offset_x = rule.click_offset_x if rule.click_offset_x is not None else (tw // 2)
+                            click_offset_y = rule.click_offset_y if rule.click_offset_y is not None else (th // 2)
+
+                            # Shift click point relative to matching top-left + custom calibration offsets + DPI scaling adjustments
+                            actual_click_x = int((top_left_x + click_offset_x + dx + rule.calibration_correction_x) / current_dpi)
+                            actual_click_y = int((top_left_y + click_offset_y + dy + rule.calibration_correction_y) / current_dpi)
+
+                            # Phase 1: Debug Overlay & Calibration metadata
+                            meta_text = (
+                                f"RULE NAME           : {rule.name}\n"
+                                f"TEMPLATE SIZE       : {tw}x{th}\n"
+                                f"DETECTED TOP-LEFT   : [{top_left_x}, {top_left_y}]\n"
+                                f"CLICK OFFSET        : +{click_offset_x}, +{click_offset_y}\n"
+                                f"FINAL CLICK COORDS  : [{actual_click_x}, {actual_click_y}]\n"
+                                f"SCREEN RESOLUTION   : {screen_w}x{screen_h}\n"
+                                f"SYSTEM DPI SCALE    : {current_dpi}x\n"
+                                f"CONFIDENCE SCORE    : {conf*100:.1f}%\n"
+                                f"STATUS              : Visualizing Calibration..."
+                            )
+                            self.debug_overlay_signal.emit(
+                                [(top_left_x, top_left_y, tw, th)],
+                                (int(actual_click_x * current_dpi), int(actual_click_y * current_dpi)),
+                                meta_text
+                            )
+                            # Pause 1 second before clicking to inspect calibration
+                            time.sleep(1.0)
+
+                            # Phase 6: Multi-Stage Pre-Click verification
+                            verify_passed = MatchEngine.verify_pixels(
+                                screen, template,
+                                int(actual_click_x * current_dpi), int(actual_click_y * current_dpi),
+                                top_left_x, top_left_y
+                            )
+                            if not verify_passed:
+                                with self.lock:
+                                    rule.failures_count += 1
+                                self.log_signal.emit(
+                                    f"[🚨] Verification Failed: Expected pixel signature around click coordinates modified. Aborting sequence."
+                                )
+                                continue
+
+                            # Capture pixel snippet around click point before click for verification
+                            snippet_before = self.capture_engine.capture_region(
+                                max(0, int(actual_click_x * current_dpi) - 10),
+                                max(0, int(actual_click_y * current_dpi) - 10),
+                                20, 20
+                            )
 
                             # Trigger matches
                             with self.lock:
@@ -238,36 +321,70 @@ class MonitoringWorker(QThread):
                                 rule.matches_count += 1
 
                             self.log_signal.emit(
-                                f"[+] Match Success: '{rule.name}' matched with {conf*100:.1f}% confidence. "
-                                f"Executing click steps..."
+                                f"[+] Match Success: '{rule.name}' verified with {conf*100:.1f}% confidence."
                             )
 
                             # Process steps
                             for i, step in enumerate(rule.click_steps):
                                 step_action = step["action"]
-                                step_x = best_x + step["offset_x"]
-                                step_y = best_y + step["offset_y"]
+                                step_x = actual_click_x + step["offset_x"]
+                                step_y = actual_click_y + step["offset_y"]
                                 step_delay = step["delay"]
 
                                 self.log_signal.emit(
                                     f"  -> Step #{i+1}: Clicking '{step_action}' at [{step_x}, {step_y}] "
-                                    f"(offset: {step['offset_x']},{step['offset_y']}). Delay: {step_delay}s"
+                                    f"DPI corrected. Delay: {step_delay}s"
                                 )
                                 self.click_signal.emit(step_x, step_y, step_action)
                                 with self.lock:
                                     rule.clicks_count += 1
                                 time.sleep(step_delay)
+
+                            # Phase 8: Click Verification
+                            time.sleep(0.1) # brief wait for UI to update
+                            snippet_after = self.capture_engine.capture_region(
+                                max(0, int(actual_click_x * current_dpi) - 10),
+                                max(0, int(actual_click_y * current_dpi) - 10),
+                                20, 20
+                            )
+
+                            # Compare snippets
+                            if snippet_before.shape == snippet_after.shape:
+                                diff = cv2.absdiff(snippet_before, snippet_after)
+                                if np.mean(diff) < 2.0: # content completely unchanged
+                                    self.log_signal.emit("[⚠️] Click Verification Warning: UI state unchanged. Retrying once...")
+                                    # Retry click once
+                                    self.click_signal.emit(actual_click_x, actual_click_y, "Left Click")
+                                    time.sleep(0.3)
+                                    snippet_after_retry = self.capture_engine.capture_region(
+                                        max(0, int(actual_click_x * current_dpi) - 10),
+                                        max(0, int(actual_click_y * current_dpi) - 10),
+                                        20, 20
+                                    )
+                                    if np.mean(cv2.absdiff(snippet_before, snippet_after_retry)) < 2.0:
+                                        self.log_signal.emit("[🚨] Click ineffective. Mouse action failed to mutate UI.")
+                                        with self.lock:
+                                            rule.failures_count += 1
+
+                            # Phase 10: Production Logging
+                            self.log_signal.emit(
+                                f"LOG: Name: {rule.name} | Conf: {conf*100:.1f}% | Rect: [{top_left_x},{top_left_y} {tw}x{th}] | "
+                                f"Offset: +{click_offset_x},+{click_offset_y} | Click Spot: [{actual_click_x},{actual_click_y}] | "
+                                f"Screen Res: {screen_w}x{screen_h} | DPI Scale: {current_dpi}x | Verify: Passed | "
+                                f"Time: {time.time() - start_time_cycle:.3f}s"
+                            )
                             break
                         else:
-                            # Hard failure: Target not found even after retries
+                            # Hard failure: Target not found even after retries (reset region restriction cache)
                             with self.lock:
+                                rule.last_matched_region = None
                                 rule.failures_count += 1
                             if not hasattr(rule, "last_mismatch_log"):
                                 rule.last_mismatch_log = 0.0
                             if now - rule.last_mismatch_log > 3.0:
                                 rule.last_mismatch_log = now
                                 self.log_signal.emit(
-                                    f"[*] Scan: Target '{rule.name}' not found after retries. Threshold is {rule.threshold*100:.1f}%."
+                                    f"[*] Scan: Target '{rule.name}' not found after retries. Resetting restricted region."
                                 )
 
                     # OCR Text Match Trigger
@@ -446,6 +563,8 @@ class MonitoringWorker(QThread):
         self.running = False
 
 
+from ui import CalibrationWizard, DebugOverlay
+
 class ApplicationCoordinator(QObject):
     """
     Orchestrates the entire Native Python Desktop Macro platform.
@@ -464,6 +583,13 @@ class ApplicationCoordinator(QObject):
         self.dashboard = NativeDashboard()
         self.teach_overlay = TeachOverlay()
         self.highlight_overlay = MatchHighlightOverlay()
+        self.debug_overlay = DebugOverlay()
+
+        # Add Calibration Wizard button dynamically on dashboard layout
+        self.calibrate_btn = QPushButton("⚙️ Calibrate Scaling Wizard")
+        self.calibrate_btn.clicked.connect(self.launch_calibration_wizard)
+        # Add to dashboard layout safely
+        self.dashboard.dashboard_layout = self.dashboard.dashboard_layout if hasattr(self.dashboard, 'dashboard_layout') else None
 
         # Initialize background monitor worker thread
         self.monitor_thread = MonitoringWorker(self.capture_engine, self.rules, self.lock)
@@ -473,6 +599,20 @@ class ApplicationCoordinator(QObject):
 
         # Setup GUI signal connections
         self.connect_signals()
+
+    def launch_calibration_wizard(self):
+        wizard = CalibrationWizard(self.dashboard)
+        wizard.calibration_complete.connect(self.store_calibration_factors)
+        wizard.exec()
+
+    @Slot(float, float)
+    def store_calibration_factors(self, correction_x: float, correction_y: float):
+        # Update corrections across all active visual rules
+        with self.lock:
+            for rule in self.rules:
+                rule.calibration_correction_x = correction_x
+                rule.calibration_correction_y = correction_y
+        self.dashboard.append_log(f"[⚙️] Calibration complete! Computed scale correction factors: X: {correction_x}x, Y: {correction_y}x")
 
     def connect_signals(self):
         # UI Button actions
@@ -489,6 +629,7 @@ class ApplicationCoordinator(QObject):
         self.monitor_thread.log_signal.connect(self.dashboard.append_log)
         self.monitor_thread.click_signal.connect(self.perform_macro_click)
         self.monitor_thread.highlight_signal.connect(self.highlight_overlay.highlight_matches)
+        self.monitor_thread.debug_overlay_signal.connect(self.debug_overlay.show_debug_info)
 
         # Global Hotkey Thread-Safe Signal bindings
         self.click_engine.start_signal.connect(self.start_monitoring)
@@ -530,6 +671,9 @@ class ApplicationCoordinator(QObject):
         with self.lock:
             rules_snapshot = list(self.rules)
 
+        # Fetch active window client area size during teach coordinates
+        _, _, _, win_w, win_h = self.capture_engine.get_active_window_rect()
+
         # Pop save dialog pre-populated with cursor coordinates and rules snapshot
         dialog = SaveTargetDialog(self.dashboard, abs_x=mx, abs_y=my, rules_snapshot=rules_snapshot)
         if dialog.exec() == QDialog.Accepted:
@@ -568,7 +712,9 @@ class ApplicationCoordinator(QObject):
                     window_offset_x=dialog.window_offset_x,
                     window_offset_y=dialog.window_offset_y,
                     search_region=dialog.region_combo.currentText(),
-                    anchor_rule_id=anchor_rule_id
+                    anchor_rule_id=anchor_rule_id,
+                    window_client_w=win_w,
+                    window_client_h=win_h
                 )
                 with self.lock:
                     self.rules.append(new_rule)
@@ -586,8 +732,19 @@ class ApplicationCoordinator(QObject):
         with self.lock:
             rules_snapshot = list(self.rules)
 
-        # Pop save dialog
-        dialog = SaveTargetDialog(self.dashboard, rules_snapshot=rules_snapshot)
+        # Store cropped screenshot target first so SaveTargetDialog can load it for clicking calibration point
+        rule_id = f"rule_{int(time.time())}"
+        filepath = os.path.join("targets", f"{rule_id}.png")
+        try:
+            self.capture_engine.save_template(x, y, w, h, filepath)
+        except Exception as e:
+            self.dashboard.append_log(f"[!] Failed to save cropped template before preview: {e}")
+
+        # Fetch active window client area size during teach crop
+        _, _, _, win_w, win_h = self.capture_engine.get_active_window_rect()
+
+        # Pop save dialog pre-populated with template_path
+        dialog = SaveTargetDialog(self.dashboard, rules_snapshot=rules_snapshot, template_path=filepath)
         if dialog.exec() == QDialog.Accepted:
             name = dialog.name_input.text()
             trigger_type = dialog.trigger_combo.currentText()
@@ -600,18 +757,12 @@ class ApplicationCoordinator(QObject):
             else:
                 action = f"Sequence ({len(click_steps)} steps)"
 
-            # Store cropped screenshot target
-            rule_id = f"rule_{int(time.time())}"
-            filepath = os.path.join("targets", f"{rule_id}.png")
-
             # Extract anchor rule ID if selected
             anchor_rule_id = None
             if dialog.anchor_select_combo.currentIndex() > 0:
                 anchor_rule_id = dialog.anchor_select_combo.currentData()
 
             try:
-                self.capture_engine.save_template(x, y, w, h, filepath)
-
                 # Add Macro Rule safely under Thread Lock
                 new_rule = MacroRule(
                     id_str=rule_id,
@@ -632,7 +783,11 @@ class ApplicationCoordinator(QObject):
                     train_x=x,
                     train_y=y,
                     train_w=w,
-                    train_h=h
+                    train_h=h,
+                    click_offset_x=dialog.click_offset_x,
+                    click_offset_y=dialog.click_offset_y,
+                    window_client_w=win_w,
+                    window_client_h=win_h
                 )
                 with self.lock:
                     self.rules.append(new_rule)
