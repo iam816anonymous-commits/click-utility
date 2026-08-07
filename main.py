@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QTableWidgetItem, QCheckBox
 from capture_engine import CaptureEngine
 from match_engine import MatchEngine
 from click_engine import ClickEngine
-from ui import NativeDashboard, TeachOverlay, SaveTargetDialog, MatchHighlightOverlay
+from ui import NativeDashboard, SaveTargetDialog, DebugOverlay, TeachOverlay, MatchHighlightOverlay
 
 class MacroRule:
     """
@@ -270,9 +270,9 @@ class MonitoringWorker(QThread):
                             click_offset_x = rule.click_offset_x if rule.click_offset_x is not None else (tw // 2)
                             click_offset_y = rule.click_offset_y if rule.click_offset_y is not None else (th // 2)
 
-                            # Shift click point relative to matching top-left + custom calibration offsets + DPI scaling adjustments
-                            actual_click_x = int((top_left_x + click_offset_x + dx + rule.calibration_correction_x) / current_dpi)
-                            actual_click_y = int((top_left_y + click_offset_y + dy + rule.calibration_correction_y) / current_dpi)
+                            # Shift click point relative to matching top-left + custom calibration offsets + DPI scaling adjustments + calibration corrections
+                            actual_click_x = int((top_left_x + click_offset_x + dx) / current_dpi) + int(rule.calibration_correction_x)
+                            actual_click_y = int((top_left_y + click_offset_y + dy) / current_dpi) + int(rule.calibration_correction_y)
 
                             # Phase 1: Debug Overlay & Calibration metadata
                             meta_text = (
@@ -585,11 +585,8 @@ class ApplicationCoordinator(QObject):
         self.highlight_overlay = MatchHighlightOverlay()
         self.debug_overlay = DebugOverlay()
 
-        # Add Calibration Wizard button dynamically on dashboard layout
-        self.calibrate_btn = QPushButton("⚙️ Calibrate Scaling Wizard")
-        self.calibrate_btn.clicked.connect(self.launch_calibration_wizard)
-        # Add to dashboard layout safely
-        self.dashboard.dashboard_layout = self.dashboard.dashboard_layout if hasattr(self.dashboard, 'dashboard_layout') else None
+        # Wire up user-facing toolbar buttons
+        self.dashboard.calibrate_btn.clicked.connect(self.launch_calibration_wizard)
 
         # Initialize background monitor worker thread
         self.monitor_thread = MonitoringWorker(self.capture_engine, self.rules, self.lock)
@@ -622,6 +619,16 @@ class ApplicationCoordinator(QObject):
         self.dashboard.teach_cursor_btn.clicked.connect(self.trigger_teach_cursor)
         self.dashboard.clear_logs_btn.clicked.connect(self.dashboard.log_output.clear)
 
+        # Connect modular TemplateManager button triggers
+        self.dashboard.template_manager.delete_btn.clicked.connect(self.handle_manager_delete)
+        self.dashboard.template_manager.replace_btn.clicked.connect(self.handle_manager_replace)
+
+        # Connect modular Settings saved trigger
+        self.dashboard.settings_page.settings_saved.connect(self.handle_settings_saved)
+
+        # Sync table row selection to populate Sidebar Debug Panel details
+        self.dashboard.rules_table.itemSelectionChanged.connect(self.sync_debugger_panel)
+
         # Teach overlay capture triggers
         self.teach_overlay.region_selected.connect(self.handle_region_selected)
 
@@ -630,6 +637,47 @@ class ApplicationCoordinator(QObject):
         self.monitor_thread.click_signal.connect(self.perform_macro_click)
         self.monitor_thread.highlight_signal.connect(self.highlight_overlay.highlight_matches)
         self.monitor_thread.debug_overlay_signal.connect(self.debug_overlay.show_debug_info)
+
+    def handle_manager_delete(self):
+        item = self.dashboard.template_manager.list_widget.currentItem()
+        if item:
+            filename = item.text()
+            path = os.path.join("targets", filename)
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                    self.dashboard.append_log(f"[🗑️] Template Asset Deleted: {filename}")
+                except Exception as e:
+                    self.dashboard.append_log(f"[!] Warning: Could not delete template asset file: {e}")
+            self.dashboard.template_manager.refresh_templates()
+
+    def handle_manager_replace(self):
+        item = self.dashboard.template_manager.list_widget.currentItem()
+        if item:
+            self.dashboard.append_log(f"[*] Re-triggering Teach Mode to replace visual asset: {item.text()}")
+            self.trigger_teach()
+
+    def handle_settings_saved(self):
+        fps = self.dashboard.settings_page.fps_combo.currentText()
+        delay = self.dashboard.settings_page.click_delay_input.text()
+        conf = self.dashboard.settings_page.conf_combo.currentText()
+        self.dashboard.append_log(f"[⚙️] Application Settings Applied: FPS={fps}, Click Delay={delay}s, Default Confidence={conf}")
+
+    def sync_debugger_panel(self):
+        row = self.dashboard.rules_table.currentRow()
+        if row >= 0:
+            with self.lock:
+                if row < len(self.rules):
+                    rule = self.rules[row]
+                    state_str = "🟢 Active Scanning" if rule.active else "🟡 Paused / Cooldown"
+                    self.dashboard.debug_panel.update_debug_view(
+                        rule.template_path,
+                        state_str,
+                        f"{rule.threshold*100:.0f}",
+                        f"({rule.abs_x}, {rule.abs_y})" if rule.abs_x is not None else "Visual Target",
+                        rule.search_region,
+                        "120" # mock execution duration ms
+                    )
 
         # Global Hotkey Thread-Safe Signal bindings
         self.click_engine.start_signal.connect(self.start_monitoring)
@@ -793,6 +841,7 @@ class ApplicationCoordinator(QObject):
                     self.rules.append(new_rule)
 
                 self.refresh_rules_table()
+                self.dashboard.template_manager.refresh_templates()
                 self.dashboard.append_log(f"[✓] Saved new target rule: '{name}' template saved to {filepath}")
             except Exception as e:
                 self.dashboard.append_log(f"[!] Failed to save template: {e}")
@@ -803,28 +852,61 @@ class ApplicationCoordinator(QObject):
         with self.lock:
             rules_snapshot = list(self.rules)
 
+        # Update Statistics Panel in real-time
+        rules_count = len(rules_snapshot)
+        running_count = sum(1 for r in rules_snapshot if r.active)
+        paused_count = sum(1 for r in rules_snapshot if not r.active)
+        failed_count = sum(1 for r in rules_snapshot if r.failures_count > 0)
+        clicks_today = sum(r.clicks_count for r in rules_snapshot)
+        matches_today = sum(r.matches_count for r in rules_snapshot)
+        self.dashboard.stats_panel.update_statistics(
+            rules_count, running_count, paused_count, failed_count, clicks_today, matches_today, clicks_today
+        )
+
         self.dashboard.rules_table.setRowCount(len(rules_snapshot))
         for row, rule in enumerate(rules_snapshot):
-            # Active check box
+            # Column 0: Active check box
             chk = QCheckBox()
             chk.setChecked(rule.active)
 
             # Setup safe status updater with lock
             def make_active_updater(target_rule):
-                return lambda state: setattr(target_rule, "active", state == Qt.Checked)
+                return lambda state: [setattr(target_rule, "active", state == Qt.Checked), self.refresh_rules_table()]
 
             chk.stateChanged.connect(make_active_updater(rule))
             self.dashboard.rules_table.setCellWidget(row, 0, chk)
 
-            # Metadata columns
+            # Column 1: Rule Name
             self.dashboard.rules_table.setItem(row, 1, QTableWidgetItem(rule.name))
-            self.dashboard.rules_table.setItem(row, 2, QTableWidgetItem(rule.trigger_type))
-            self.dashboard.rules_table.setItem(row, 3, QTableWidgetItem(rule.action))
-            self.dashboard.rules_table.setItem(row, 4, QTableWidgetItem(f"{rule.cooldown}s"))
-            self.dashboard.rules_table.setItem(row, 5, QTableWidgetItem(f"{rule.threshold*100:.0f}%"))
-            self.dashboard.rules_table.setItem(row, 6, QTableWidgetItem("Never"))
 
-            # Delete button
+            # Column 2: Status Indicator (🟢 Running, 🟡 Paused, etc.)
+            status_str = "🟢 Running" if rule.active else "🟡 Paused"
+            if rule.failures_count > 0:
+                status_str = "🔴 Error"
+            self.dashboard.rules_table.setItem(row, 2, QTableWidgetItem(status_str))
+
+            # Column 3: Trigger Type
+            self.dashboard.rules_table.setItem(row, 3, QTableWidgetItem(rule.trigger_type))
+
+            # Column 4: Search Region
+            self.dashboard.rules_table.setItem(row, 4, QTableWidgetItem(rule.search_region))
+
+            # Column 5: Last Match
+            last_match_str = f"{rule.matches_count} matches" if rule.matches_count > 0 else "Never"
+            self.dashboard.rules_table.setItem(row, 5, QTableWidgetItem(last_match_str))
+
+            # Column 6: Last Click
+            last_click_str = f"{rule.clicks_count} clicks" if rule.clicks_count > 0 else "Never"
+            self.dashboard.rules_table.setItem(row, 6, QTableWidgetItem(last_click_str))
+
+            # Column 7: Success Rate percentage
+            success_pct = "100.0%"
+            if rule.failures_count + rule.clicks_count > 0:
+                rate = (rule.clicks_count / (rule.clicks_count + rule.failures_count)) * 100.0
+                success_pct = f"{rate:.1f}%"
+            self.dashboard.rules_table.setItem(row, 7, QTableWidgetItem(success_pct))
+
+            # Column 8: Actions (🗑️ Delete)
             del_btn = QPushButton("🗑️ Delete")
             del_btn.setToolTip("Delete this rule")
 
@@ -832,7 +914,7 @@ class ApplicationCoordinator(QObject):
                 return lambda: self.delete_rule(target_rule_id)
 
             del_btn.clicked.connect(make_rule_deleter(rule.id_str))
-            self.dashboard.rules_table.setCellWidget(row, 7, del_btn)
+            self.dashboard.rules_table.setCellWidget(row, 8, del_btn)
 
     def delete_rule(self, rule_id: str):
         # Safely mutate rules list under lock
@@ -855,6 +937,7 @@ class ApplicationCoordinator(QObject):
                 self.dashboard.append_log(f"[-] Deleted rule: '{rule_to_remove.name}'")
 
         self.refresh_rules_table()
+        self.dashboard.template_manager.refresh_templates()
 
     @Slot(int, int, str)
     def perform_macro_click(self, x: int, y: int, action_type: str):
