@@ -3,7 +3,7 @@ from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView, QGroupBox, QFrame,
-    QTabWidget, QSplitter
+    QTabWidget, QSplitter, QCheckBox
 )
 from PySide6.QtGui import QFont, QColor
 
@@ -94,11 +94,16 @@ class NativeDashboard(QWidget):
         self.calibrate_btn = QPushButton("⚙️ Calibrate")
         self.calibrate_btn.setStyleSheet("background-color: #4B5563;")
 
+        self.move_only_chk = QCheckBox("Move Only (No Click) Debug Mode")
+        self.move_only_chk.setToolTip("Moves the mouse cursor to targets and draws highlights for verification without clicking")
+        self.move_only_chk.setStyleSheet("QCheckBox { font-weight: bold; color: #10B981; }")
+
         self.toolbar_layout.addWidget(self.teach_btn)
         self.toolbar_layout.addWidget(self.teach_cursor_btn)
         self.toolbar_layout.addWidget(self.start_btn)
         self.toolbar_layout.addWidget(self.stop_btn)
         self.toolbar_layout.addWidget(self.calibrate_btn)
+        self.toolbar_layout.addWidget(self.move_only_chk)
         self.toolbar_layout.addStretch()
         self.main_layout.addLayout(self.toolbar_layout)
 

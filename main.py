@@ -1,6 +1,7 @@
 import sys
 import os
 import cv2
+import numpy as np
 import threading
 import time
 from PySide6.QtCore import QThread, Signal, Slot, Qt, QObject
@@ -88,6 +89,7 @@ class MonitoringWorker(QThread):
         self.rules = rules
         self.lock = lock
         self.running = False
+        self.move_only = False
 
         # Performance Settings configuration parameters
         self.fps_limit = 10.0
@@ -275,9 +277,9 @@ class MonitoringWorker(QThread):
                             click_offset_x = rule.click_offset_x if rule.click_offset_x is not None else (tw // 2)
                             click_offset_y = rule.click_offset_y if rule.click_offset_y is not None else (th // 2)
 
-                            # Shift click point relative to matching top-left + custom calibration offsets + DPI scaling adjustments + calibration corrections
-                            actual_click_x = int((top_left_x + click_offset_x + dx) / current_dpi) + int(rule.calibration_correction_x)
-                            actual_click_y = int((top_left_y + click_offset_y + dy) / current_dpi) + int(rule.calibration_correction_y)
+                            # Shift click point relative to matching top-left + custom calibration offsets + calibration corrections
+                            actual_click_x = int(top_left_x + click_offset_x + dx) + int(rule.calibration_correction_x)
+                            actual_click_y = int(top_left_y + click_offset_y + dy) + int(rule.calibration_correction_y)
 
                             # Phase 1: Debug Overlay & Calibration metadata
                             meta_text = (
@@ -293,7 +295,7 @@ class MonitoringWorker(QThread):
                             )
                             self.debug_overlay_signal.emit(
                                 [(top_left_x, top_left_y, tw, th)],
-                                (int(actual_click_x * current_dpi), int(actual_click_y * current_dpi)),
+                                (actual_click_x, actual_click_y),
                                 meta_text
                             )
                             # Pause 1 second before clicking to inspect calibration
@@ -302,7 +304,7 @@ class MonitoringWorker(QThread):
                             # Phase 6: Multi-Stage Pre-Click verification
                             verify_passed = MatchEngine.verify_pixels(
                                 screen, template,
-                                int(actual_click_x * current_dpi), int(actual_click_y * current_dpi),
+                                int(actual_click_x), int(actual_click_y),
                                 top_left_x, top_left_y
                             )
                             if not verify_passed:
@@ -315,8 +317,8 @@ class MonitoringWorker(QThread):
 
                             # Capture pixel snippet around click point before click for verification
                             snippet_before = self.capture_engine.capture_region(
-                                max(0, int(actual_click_x * current_dpi) - 10),
-                                max(0, int(actual_click_y * current_dpi) - 10),
+                                max(0, int(actual_click_x) - 10),
+                                max(0, int(actual_click_y) - 10),
                                 20, 20
                             )
 
@@ -335,6 +337,39 @@ class MonitoringWorker(QThread):
                             self.log_signal.emit(
                                 f"[+] Match Success: '{rule.name}' verified with {conf*100:.1f}% confidence."
                             )
+
+                            # Move cursor and retrieve actual coordinate
+                            import pyautogui
+                            mouse_before_x, mouse_before_y = pyautogui.position()
+
+                            # Move cursor precisely
+                            pyautogui.moveTo(actual_click_x, actual_click_y, duration=0.1)
+                            time.sleep(0.05)
+                            mouse_after_x, mouse_after_y = pyautogui.position()
+
+                            # Fetch active window pos
+                            title, wx, wy, ww, wh = self.capture_engine.get_active_window_rect()
+
+                            # Complete click path instrumentation log
+                            log_msg = (
+                                f"[Click Path Instrument] Rule: '{rule.name}'\n"
+                                f"  - Template Top-Left: ({top_left_x}, {top_left_y})\n"
+                                f"  - Template Size: {tw}x{th}\n"
+                                f"  - Click Offset: (+{click_offset_x}, +{click_offset_y})\n"
+                                f"  - Calculated Click Coords: ({actual_click_x}, {actual_click_y})\n"
+                                f"  - Active Window Position: ({wx}, {wy})\n"
+                                f"  - Monitor Origin: (0, 0)\n"
+                                f"  - Windows DPI Scaling: {current_dpi}x\n"
+                                f"  - Mouse Pos Before Move: ({mouse_before_x}, {mouse_before_y})\n"
+                                f"  - Requested Mouse Coordinate: ({actual_click_x}, {actual_click_y})\n"
+                                f"  - Actual Mouse Coordinate after moveTo(): ({mouse_after_x}, {mouse_after_y})"
+                            )
+                            self.log_signal.emit(log_msg)
+
+                            if self.move_only:
+                                self.log_signal.emit(f"  [Move Only Mode] Bypassing clicks to [{actual_click_x}, {actual_click_y}] as requested.")
+                                time.sleep(1.0)
+                                break
 
                             # Process steps
                             for i, step in enumerate(rule.click_steps):
@@ -355,8 +390,8 @@ class MonitoringWorker(QThread):
                             # Phase 8: Click Verification
                             time.sleep(0.1) # brief wait for UI to update
                             snippet_after = self.capture_engine.capture_region(
-                                max(0, int(actual_click_x * current_dpi) - 10),
-                                max(0, int(actual_click_y * current_dpi) - 10),
+                                max(0, int(actual_click_x) - 10),
+                                max(0, int(actual_click_y) - 10),
                                 20, 20
                             )
 
@@ -369,8 +404,8 @@ class MonitoringWorker(QThread):
                                     self.click_signal.emit(actual_click_x, actual_click_y, "Left Click")
                                     time.sleep(0.3)
                                     snippet_after_retry = self.capture_engine.capture_region(
-                                        max(0, int(actual_click_x * current_dpi) - 10),
-                                        max(0, int(actual_click_y * current_dpi) - 10),
+                                        max(0, int(actual_click_x) - 10),
+                                        max(0, int(actual_click_y) - 10),
                                         20, 20
                                     )
                                     if np.mean(cv2.absdiff(snippet_before, snippet_after_retry)) < 2.0:
@@ -724,6 +759,8 @@ class ApplicationCoordinator(QObject):
     @Slot()
     def start_monitoring(self):
         if not self.monitor_thread.isRunning():
+            # Update 'Move Only' debug mode before starting worker
+            self.monitor_thread.move_only = self.dashboard.move_only_chk.isChecked()
             self.monitor_thread.start()
             self.dashboard.append_log("[▶] Screen Monitoring started.")
 

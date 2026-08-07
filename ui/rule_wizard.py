@@ -3,9 +3,11 @@ from PySide6.QtCore import Qt, Signal, Slot, QTimer
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QComboBox, QSlider, QWidget, QStackedWidget, QGroupBox,
-    QTableWidget, QTableWidgetItem, QHeaderView
+    QTableWidget, QTableWidgetItem, QHeaderView, QApplication
 )
 from PySide6.QtGui import QFont, QColor, QPixmap, QPainter, QPen
+
+from capture_engine import CaptureEngine
 
 class TeachOverlay(QWidget):
     """
@@ -64,7 +66,67 @@ class TeachOverlay(QWidget):
             painter.drawRect(min(x1, x2), min(y1, y2), abs(x1 - x2), abs(y1 - y2))
 
 
-from PySide6.QtWidgets import QApplication
+class CoordinateCaptureOverlay(QWidget):
+    """
+    Transparent fullscreen overlay that follows the mouse cursor, showing a crosshair,
+    a magnifier/snipping visual hint, and the current coordinates. Click to capture.
+    """
+    coordinate_captured = Signal(int, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setMouseTracking(True)
+        self.cursor_pos = None
+
+    def show_overlay(self):
+        screen = QApplication.primaryScreen()
+        self.setGeometry(screen.geometry())
+        self.cursor_pos = None
+        self.show()
+
+    def mouseMoveEvent(self, event):
+        self.cursor_pos = event.globalPosition().toPoint()
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            pos = event.globalPosition().toPoint()
+            self.hide()
+            self.coordinate_captured.emit(pos.x(), pos.y())
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 50)) # Very light dim
+
+        if self.cursor_pos:
+            cx, cy = self.cursor_pos.x(), self.cursor_pos.y()
+
+            # Draw precise crosshairs
+            pen = QPen(QColor(239, 68, 68), 1, Qt.SolidLine)
+            painter.setPen(pen)
+            painter.drawLine(0, cy, self.width(), cy)
+            painter.drawLine(cx, 0, cx, self.height())
+
+            # Draw a central targeting ring
+            painter.drawEllipse(cx - 10, cy - 10, 20, 20)
+
+            # Magnifier visual frame: 160x60 label box next to cursor
+            box_w, box_h = 160, 60
+            bx = cx + 15 if cx + 15 + box_w < self.width() else cx - 15 - box_w
+            by = cy + 15 if cy + 15 + box_h < self.height() else cy - 15 - box_h
+
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(17, 24, 39, 220)) # Dark background
+            painter.drawRoundedRect(bx, by, box_w, box_h, 4, 4)
+
+            painter.setPen(QColor(253, 224, 71)) # Yellow text
+            painter.setFont(QFont("Courier New", 9, QFont.Bold))
+            painter.drawText(bx + 10, by + 20, f"X: {cx}")
+            painter.drawText(bx + 10, by + 35, f"Y: {cy}")
+            painter.drawText(bx + 10, by + 50, "Click to Capture")
+
 
 class TemplateOffsetPicker(QLabel):
     """
@@ -147,7 +209,23 @@ class RuleWizard(QDialog):
         self.click_offset_x = 0
         self.click_offset_y = 0
 
+        # Capture History
+        self.coordinate_history = []
+        if abs_x is not None and abs_y is not None:
+            self.coordinate_history.append((abs_x, abs_y))
+
         self.click_steps = [{"action": "Single Click", "offset_x": 0, "offset_y": 0, "delay": 0.5}]
+
+        # Overlay initialization
+        self.capture_overlay = CoordinateCaptureOverlay()
+        self.capture_overlay.coordinate_captured.connect(self.store_captured_coordinate)
+
+        # Timer for capture countdown
+        self.countdown_timer = QTimer(self)
+        self.countdown_timer.setInterval(1000)
+        self.countdown_timer.timeout.connect(self.handle_countdown_tick)
+        self.countdown_seconds_left = 0
+
         self.init_ui()
 
     def init_ui(self):
@@ -168,14 +246,43 @@ class RuleWizard(QDialog):
         self.step2_widget = QWidget()
         s2_layout = QVBoxLayout(self.step2_widget)
         s2_layout.addWidget(QLabel("<h3>Step 2: Calibrate Click Target Spot</h3>"))
-        s2_layout.addWidget(QLabel("Click inside the preview template below to choose the precise coordinate of click:"))
 
+        # Option A: Visual Target Picker (Image offset)
+        self.visual_picker_group = QGroupBox("Visual Target Calibration")
+        v_layout = QVBoxLayout(self.visual_picker_group)
+        v_layout.addWidget(QLabel("Click inside the template crop below to set relative click offset:"))
         self.offset_picker = TemplateOffsetPicker(self)
         self.offset_picker.offset_clicked.connect(self.update_offset_lbl)
-        s2_layout.addWidget(self.offset_picker)
-
+        v_layout.addWidget(self.offset_picker)
         self.offset_lbl = QLabel("🎯 Click Offset: X: +0 px, Y: +0 px")
-        s2_layout.addWidget(self.offset_lbl)
+        v_layout.addWidget(self.offset_lbl)
+        s2_layout.addWidget(self.visual_picker_group)
+
+        # Option B: Direct Coordinate Capture Tool
+        self.direct_capture_group = QGroupBox("Direct Coordinate Capture Tool")
+        dc_layout = QVBoxLayout(self.direct_capture_group)
+
+        delay_row = QHBoxLayout()
+        delay_row.addWidget(QLabel("Countdown Delay:"))
+        self.countdown_combo = QComboBox()
+        self.countdown_combo.addItems(["0 seconds", "1 second", "2 seconds", "3 seconds", "5 seconds"])
+        delay_row.addWidget(self.countdown_combo)
+        dc_layout.addLayout(delay_row)
+
+        self.capture_pos_btn = QPushButton("📍 Start Coordinate Capture")
+        self.capture_pos_btn.setStyleSheet("background-color: #3B82F6; color: white; font-weight: bold;")
+        self.capture_pos_btn.clicked.connect(self.start_capture_countdown)
+        dc_layout.addWidget(self.capture_pos_btn)
+
+        self.abs_coord_lbl = QLabel("<b>Absolute Coordinate:</b> Not captured")
+        self.win_coord_lbl = QLabel("<b>Window-Relative Offset:</b> Not calculated")
+        self.win_title_lbl = QLabel("<b>Target Window:</b> N/A")
+
+        dc_layout.addWidget(self.abs_coord_lbl)
+        dc_layout.addWidget(self.win_coord_lbl)
+        dc_layout.addWidget(self.win_title_lbl)
+
+        s2_layout.addWidget(self.direct_capture_group)
         s2_layout.addStretch()
         self.stacked_widget.addWidget(self.step2_widget)
 
@@ -336,6 +443,54 @@ class RuleWizard(QDialog):
                 return lambda: self.delete_click_step(index)
             del_btn.clicked.connect(make_deleter(row))
             self.steps_table.setCellWidget(row, 4, del_btn)
+
+    # Coordinate Capture Features
+    def start_capture_countdown(self):
+        delay_txt = self.countdown_combo.currentText()
+        try:
+            self.countdown_seconds_left = int(delay_txt.split()[0])
+        except ValueError:
+            self.countdown_seconds_left = 0
+
+        self.capture_pos_btn.setEnabled(False)
+        if self.countdown_seconds_left > 0:
+            self.capture_pos_btn.setText(f"Capturing in {self.countdown_seconds_left}...")
+            self.countdown_timer.start()
+        else:
+            self.launch_coordinate_overlay()
+
+    def handle_countdown_tick(self):
+        self.countdown_seconds_left -= 1
+        if self.countdown_seconds_left > 0:
+            self.capture_pos_btn.setText(f"Capturing in {self.countdown_seconds_left}...")
+        else:
+            self.countdown_timer.stop()
+            self.launch_coordinate_overlay()
+
+    def launch_coordinate_overlay(self):
+        self.capture_overlay.show_overlay()
+        self.capture_pos_btn.setText("📍 Start Coordinate Capture")
+        self.capture_pos_btn.setEnabled(True)
+
+    @Slot(int, int)
+    def store_captured_coordinate(self, gx: int, gy: int):
+        self.abs_x = gx
+        self.abs_y = gy
+        self.coordinate_history.append((gx, gy))
+
+        # Calculate Window-Relative coordinate
+        title, wx, wy, ww, wh = CaptureEngine.get_active_window_rect()
+        offset_x = gx - wx
+        offset_y = gy - wy
+
+        self.window_title = title
+        self.window_offset_x = offset_x
+        self.window_offset_y = offset_y
+
+        # Update Preview UI labels
+        self.abs_coord_lbl.setText(f"<b>Absolute Coordinate:</b> X: {gx}, Y: {gy}")
+        self.win_coord_lbl.setText(f"<b>Window-Relative Offset:</b> offset X: {offset_x}, Y: {offset_y}")
+        self.win_title_lbl.setText(f"<b>Target Window:</b> {title}")
 
 
 class SaveTargetDialog(RuleWizard):
