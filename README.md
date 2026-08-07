@@ -1,4 +1,4 @@
-# 🎯 Professional Native Automation Studio
+# 🎯 Professional Calibrated Native Automation Studio
 
 > An ultra-performant, calibrated **Windows-native desktop automation studio and workflow engine** designed as a highly reliable, modular replacement for Power Automate and UiPath. Built using Python, PySide6 (Qt6), OpenCV, MSS, pynput, and Tesseract OCR.
 
@@ -40,6 +40,7 @@ This studio incorporates professional-grade automation pipelines to guarantee **
 * **Step 2 (Calibration Click Offset)**: Interactive visual template clicked-point offset. Sets click relative to top-left.
 * **Step 3 (Search Region)**: Scope search restriction constraints (Entire Screen, Active Window, Trained Region).
 * **Step 4 (Parameters)**: Advanced sliders for confidence thresholds, cooldown delays, and name specifications.
+* **Click Sequence Builder**: Exposes an interactive click sequence builder inside Step 4 where users can specify action types, custom offsets, delays, and delete individual steps visually.
 
 ### 2. Multi-Stage Pipeline Workflow Engine
 Every rule operates on a robust sequential macro pipeline:
@@ -50,12 +51,24 @@ $$\text{WHEN} \longrightarrow \text{VERIFY} \longrightarrow \text{WAIT} \longrig
 4. **ACTION**: Dispatches calibrated click coordinates via explicit DPI-aware clicks (`moveTo` $\rightarrow$ `mouseDown` $\rightarrow$ `mouseUp`).
 5. **VERIFY RESULT**: Performs pre-click pixel signature checks and post-click state evaluations (retrying click once if UI is unchanged).
 
-### 3. Real-Time HUD Debug Overlay
+### 3. Interactive DPI & Alignment Calibration Wizard
+* Select **⚙️ Calibrate** from the toolbar to launch the interactive calibration assistant.
+* The studio spawns a click-responsive target window over your monitor and places an Emerald green concentric crosshair on screen.
+* Click precisely on the green target; the wizard evaluates the pixel difference between your cursor coordinates and PySide's device pixel coordinates to compute correction offsets per monitor.
+
+### 4. Real-Time HUD Debug Overlay
 Activating debug visual mode renders a transparent fullscreen HUD drawing:
 - Green bounding boxes around all candidate target templates.
 - A red crosshair at the exact scheduled calibration click coordinate.
 - Text metadata including: template dimensions, detected top-left, click offset shift, DPI scaling ratios, confidence scores, and verification status.
 - Pauses for exactly **1 second** before performing clicking events, letting developers verify mouse calibration live.
+
+### 5. Multi-Tab Sidebar Panels
+* **Console**: Rich HTML log console color-coding successes, info logs, and failure warnings.
+* **Debugger**: Sidebar tracker presenting template previews, matching coordinates, state, and execution times.
+* **Templates**: Crop previewer showing all target PNG files, and retake/replace/delete triggers.
+* **Settings**: Tune scan FPS limits (from 5 to 30 FPS) and click synthesis delay intervals.
+* **Workflow**: Pipeline steps visualizer.
 
 ---
 

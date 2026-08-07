@@ -80,6 +80,7 @@ class MonitoringWorker(QThread):
     click_signal = Signal(int, int, str) # x, y, action
     highlight_signal = Signal(list) # list of Tuples (x, y, w, h)
     debug_overlay_signal = Signal(list, tuple, str) # rects, click_point, meta_text
+    live_debug_signal = Signal(str, str, str, str, str, str) # rule_id, state, conf, click_coords, region, execution_time
 
     def __init__(self, capture_engine: CaptureEngine, rules: list[MacroRule], lock: threading.Lock):
         super().__init__()
@@ -87,6 +88,10 @@ class MonitoringWorker(QThread):
         self.rules = rules
         self.lock = lock
         self.running = False
+
+        # Performance Settings configuration parameters
+        self.fps_limit = 10.0
+        self.click_synthesizer_delay = 0.02
 
     def run(self):
         self.running = True
@@ -320,6 +325,13 @@ class MonitoringWorker(QThread):
                                 rule.last_triggered = now
                                 rule.matches_count += 1
 
+                            # Update real-time Sidebar Debug Panel via signal
+                            exec_dur = int((time.time() - start_time_cycle) * 1000)
+                            self.live_debug_signal.emit(
+                                rule.id_str, "🟢 Matched & Executing", f"{conf*100:.1f}%",
+                                f"({actual_click_x}, {actual_click_y})", rule.search_region, str(exec_dur)
+                            )
+
                             self.log_signal.emit(
                                 f"[+] Match Success: '{rule.name}' verified with {conf*100:.1f}% confidence."
                             )
@@ -552,8 +564,8 @@ class MonitoringWorker(QThread):
                                 time.sleep(step_delay)
                             break
 
-                # Delay between scans (e.g. scanning ~10 times per second)
-                time.sleep(0.1)
+                # Delay between scans (dynamically computed from performance FPS limit settings)
+                time.sleep(max(0.01, 1.0 / self.fps_limit))
 
             except Exception as e:
                 self.log_signal.emit(f"[!] Error in capture loop: {e}")
@@ -637,6 +649,17 @@ class ApplicationCoordinator(QObject):
         self.monitor_thread.click_signal.connect(self.perform_macro_click)
         self.monitor_thread.highlight_signal.connect(self.highlight_overlay.highlight_matches)
         self.monitor_thread.debug_overlay_signal.connect(self.debug_overlay.show_debug_info)
+        self.monitor_thread.live_debug_signal.connect(self.handle_live_debug_update)
+
+    @Slot(str, str, str, str, str, str)
+    def handle_live_debug_update(self, rule_id, state, conf, click_coords, region, execution_time):
+        row = self.dashboard.rules_table.currentRow()
+        if row >= 0:
+            with self.lock:
+                if row < len(self.rules) and self.rules[row].id_str == rule_id:
+                    self.dashboard.debug_panel.update_debug_view(
+                        self.rules[row].template_path, state, conf, click_coords, region, execution_time
+                    )
 
     def handle_manager_delete(self):
         item = self.dashboard.template_manager.list_widget.currentItem()
@@ -661,6 +684,13 @@ class ApplicationCoordinator(QObject):
         fps = self.dashboard.settings_page.fps_combo.currentText()
         delay = self.dashboard.settings_page.click_delay_input.text()
         conf = self.dashboard.settings_page.conf_combo.currentText()
+
+        try:
+            self.monitor_thread.fps_limit = float(fps)
+            self.monitor_thread.click_synthesizer_delay = float(delay)
+        except ValueError:
+            pass
+
         self.dashboard.append_log(f"[⚙️] Application Settings Applied: FPS={fps}, Click Delay={delay}s, Default Confidence={conf}")
 
     def sync_debugger_panel(self):
