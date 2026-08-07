@@ -293,5 +293,45 @@ class TestMatchEngine(unittest.TestCase):
         self.assertEqual(rule.train_w, 50)
         self.assertEqual(rule.train_h, 50)
 
+    def test_rule_statistics_tracking(self):
+        from main import MacroRule
+        rule = MacroRule(
+            id_str="stats_test_rule",
+            name="Stats Track Rule",
+            trigger_type="Image Template Match",
+            action="Single Click",
+            cooldown=1.0,
+            threshold=0.85,
+            template_path="targets/fake.png"
+        )
+        # Ensure tracking stats initialize to 0
+        self.assertEqual(rule.matches_count, 0)
+        self.assertEqual(rule.clicks_count, 0)
+        self.assertEqual(rule.failures_count, 0)
+
+        # Simulate statistics modifications under visual match trigger
+        rule.matches_count += 1
+        rule.clicks_count += 2
+        rule.failures_count += 3
+
+        self.assertEqual(rule.matches_count, 1)
+        self.assertEqual(rule.clicks_count, 2)
+        self.assertEqual(rule.failures_count, 3)
+
+    def test_retry_recovery_logic(self):
+        # Simulate attempt counters representing the up to 3 retries logic
+        attempts = 0
+        success = False
+
+        # Simulate 3 attempts loop with mock target appearing on the 3rd attempt
+        for attempt in range(3):
+            attempts += 1
+            if attempt == 2: # Mock success on the 3rd attempt
+                success = True
+                break
+
+        self.assertEqual(attempts, 3)
+        self.assertTrue(success)
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,6 +40,12 @@ class MacroRule:
         self.train_h = train_h
         self.active = True
         self.last_triggered = 0.0
+
+        # Rule statistics tracking attributes
+        self.matches_count = 0
+        self.clicks_count = 0
+        self.failures_count = 0
+
         # If no click steps specified, default to a single step at the center (offset 0,0)
         if click_steps is None:
             self.click_steps = [{"action": action, "offset_x": 0, "offset_y": 0, "delay": 0.5}]
@@ -170,8 +176,28 @@ class MonitoringWorker(QThread):
                         if template is None:
                             continue
 
-                        # Match multi template
-                        matches = MatchEngine.match_template_multi(search_area, template, threshold=rule.threshold)
+                        # Implement up to 3 retries with a 0.2s delay for target matching
+                        matches = []
+                        for attempt in range(3):
+                            if attempt > 0:
+                                time.sleep(0.2)
+                                # Recapture screen area during retry to allow target recovery
+                                latest_screen = self.capture_engine.capture_full_screen()
+                                if rule.search_region == "Active Window Only":
+                                    title, wx, wy, ww, wh = self.capture_engine.get_active_window_rect()
+                                    if "Headless" not in title:
+                                        crop_x1 = max(0, wx)
+                                        crop_y1 = max(0, wy)
+                                        crop_x2 = min(latest_screen.shape[1], wx + ww)
+                                        crop_y2 = min(latest_screen.shape[0], wy + wh)
+                                        if crop_x2 > crop_x1 and crop_y2 > crop_y1:
+                                            search_area = latest_screen[crop_y1:crop_y2, crop_x1:crop_x2]
+                                else:
+                                    search_area = latest_screen
+
+                            matches = MatchEngine.match_template_multi(search_area, template, threshold=rule.threshold)
+                            if matches:
+                                break
 
                         if len(matches) > 1:
                             # Highlight all matches
@@ -180,6 +206,10 @@ class MonitoringWorker(QThread):
                             for (cx, cy, conf) in matches:
                                 rects.append((cx + crop_x1 - tw//2, cy + crop_y1 - th//2, tw, th))
                             self.highlight_signal.emit(rects)
+
+                            # Update stats
+                            with self.lock:
+                                rule.failures_count += 1
 
                             # Warning & Skip
                             if not hasattr(rule, "last_multi_match_log"):
@@ -204,6 +234,7 @@ class MonitoringWorker(QThread):
                             # Trigger matches
                             with self.lock:
                                 rule.last_triggered = now
+                                rule.matches_count += 1
 
                             self.log_signal.emit(
                                 f"[+] Match Success: '{rule.name}' matched with {conf*100:.1f}% confidence. "
@@ -222,12 +253,46 @@ class MonitoringWorker(QThread):
                                     f"(offset: {step['offset_x']},{step['offset_y']}). Delay: {step_delay}s"
                                 )
                                 self.click_signal.emit(step_x, step_y, step_action)
+                                with self.lock:
+                                    rule.clicks_count += 1
                                 time.sleep(step_delay)
                             break
+                        else:
+                            # Hard failure: Target not found even after retries
+                            with self.lock:
+                                rule.failures_count += 1
+                            if not hasattr(rule, "last_mismatch_log"):
+                                rule.last_mismatch_log = 0.0
+                            if now - rule.last_mismatch_log > 3.0:
+                                rule.last_mismatch_log = now
+                                self.log_signal.emit(
+                                    f"[*] Scan: Target '{rule.name}' not found after retries. Threshold is {rule.threshold*100:.1f}%."
+                                )
 
                     # OCR Text Match Trigger
                     elif rule.trigger_type == "OCR Text Match":
-                        match = MatchEngine.match_text_ocr(search_area, rule.name)
+                        # Implement up to 3 retries with 0.2s delay for OCR text matching
+                        match = None
+                        for attempt in range(3):
+                            if attempt > 0:
+                                time.sleep(0.2)
+                                latest_screen = self.capture_engine.capture_full_screen()
+                                if rule.search_region == "Active Window Only":
+                                    title, wx, wy, ww, wh = self.capture_engine.get_active_window_rect()
+                                    if "Headless" not in title:
+                                        crop_x1 = max(0, wx)
+                                        crop_y1 = max(0, wy)
+                                        crop_x2 = min(latest_screen.shape[1], wx + ww)
+                                        crop_y2 = min(latest_screen.shape[0], wy + wh)
+                                        if crop_x2 > crop_x1 and crop_y2 > crop_y1:
+                                            search_area = latest_screen[crop_y1:crop_y2, crop_x1:crop_x2]
+                                else:
+                                    search_area = latest_screen
+
+                            match = MatchEngine.match_text_ocr(search_area, rule.name)
+                            if match:
+                                break
+
                         if match:
                             cx, cy, conf = match
                             best_x = cx + crop_x1
@@ -238,6 +303,7 @@ class MonitoringWorker(QThread):
 
                             with self.lock:
                                 rule.last_triggered = now
+                                rule.matches_count += 1
 
                             self.log_signal.emit(
                                 f"[+] OCR Match Success: Found text '{rule.name}' with {conf*100:.1f}% confidence. Executing click steps..."
@@ -254,8 +320,14 @@ class MonitoringWorker(QThread):
                                     f"(offset: {step['offset_x']},{step['offset_y']}). Delay: {step_delay}s"
                                 )
                                 self.click_signal.emit(step_x, step_y, step_action)
+                                with self.lock:
+                                    rule.clicks_count += 1
                                 time.sleep(step_delay)
                             break
+                        else:
+                            # Hard failure: Target not found even after retries
+                            with self.lock:
+                                rule.failures_count += 1
 
                     # Window-Relative Position Trigger
                     elif rule.trigger_type == "Window-Relative Position":
@@ -288,6 +360,8 @@ class MonitoringWorker(QThread):
                                     pass
 
                             if not window_found:
+                                with self.lock:
+                                    rule.failures_count += 1
                                 self.log_signal.emit(
                                     f"[🚨] Target window '{rule.window_title}' not found. Skipping click sequence to prevent random clicking."
                                 )
@@ -302,6 +376,7 @@ class MonitoringWorker(QThread):
 
                             with self.lock:
                                 rule.last_triggered = now
+                                rule.matches_count += 1
 
                             self.log_signal.emit(
                                 f"[+] Window Relative Trigger Success: '{rule.name}' inside active window '{title}' "
@@ -320,6 +395,8 @@ class MonitoringWorker(QThread):
                                     f"(offset: {step['offset_x']},{step['offset_y']}). Delay: {step_delay}s"
                                 )
                                 self.click_signal.emit(step_x, step_y, step_action)
+                                with self.lock:
+                                    rule.clicks_count += 1
                                 time.sleep(step_delay)
                             break
 
@@ -335,6 +412,7 @@ class MonitoringWorker(QThread):
 
                             with self.lock:
                                 rule.last_triggered = now
+                                rule.matches_count += 1
 
                             self.log_signal.emit(
                                 f"[+] Absolute Trigger Success: '{rule.name}' at [{target_x}, {target_y}] (Shifted dx:{dx}, dy:{dy}). Executing click steps..."
@@ -351,6 +429,8 @@ class MonitoringWorker(QThread):
                                     f"(offset: {step['offset_x']},{step['offset_y']}). Delay: {step_delay}s"
                                 )
                                 self.click_signal.emit(step_x, step_y, step_action)
+                                with self.lock:
+                                    rule.clicks_count += 1
                                 time.sleep(step_delay)
                             break
 
@@ -481,8 +561,8 @@ class ApplicationCoordinator(QObject):
                     threshold=threshold,
                     template_path=filepath,
                     click_steps=click_steps,
-                    abs_x=mx,
-                    abs_y=my,
+                    abs_x=dialog.abs_x,
+                    abs_y=dialog.abs_y,
                     window_title=dialog.window_title,
                     window_offset_x=dialog.window_offset_x,
                     window_offset_y=dialog.window_offset_y,
@@ -541,6 +621,11 @@ class ApplicationCoordinator(QObject):
                     threshold=threshold,
                     template_path=filepath,
                     click_steps=click_steps,
+                    abs_x=dialog.abs_x,
+                    abs_y=dialog.abs_y,
+                    window_title=dialog.window_title,
+                    window_offset_x=dialog.window_offset_x,
+                    window_offset_y=dialog.window_offset_y,
                     search_region=dialog.region_combo.currentText(),
                     anchor_rule_id=anchor_rule_id,
                     train_x=x,
