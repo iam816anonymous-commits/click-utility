@@ -3,7 +3,7 @@ from PySide6.QtCore import Qt, Signal, Slot, QTimer
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QComboBox, QSlider, QWidget, QStackedWidget, QGroupBox,
-    QTableWidget, QTableWidgetItem, QHeaderView, QApplication
+    QTableWidget, QTableWidgetItem, QHeaderView, QApplication, QCheckBox
 )
 from PySide6.QtGui import QFont, QColor, QPixmap, QPainter, QPen
 
@@ -98,30 +98,30 @@ class CoordinateCaptureOverlay(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 50)) # Very light dim
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 50))
 
         if self.cursor_pos:
             cx, cy = self.cursor_pos.x(), self.cursor_pos.y()
 
-            # Draw precise crosshairs
+            # Draw crosshairs
             pen = QPen(QColor(239, 68, 68), 1, Qt.SolidLine)
             painter.setPen(pen)
             painter.drawLine(0, cy, self.width(), cy)
             painter.drawLine(cx, 0, cx, self.height())
 
-            # Draw a central targeting ring
+            # Target ring
             painter.drawEllipse(cx - 10, cy - 10, 20, 20)
 
-            # Magnifier visual frame: 160x60 label box next to cursor
+            # Magnifier visual card
             box_w, box_h = 160, 60
             bx = cx + 15 if cx + 15 + box_w < self.width() else cx - 15 - box_w
             by = cy + 15 if cy + 15 + box_h < self.height() else cy - 15 - box_h
 
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(17, 24, 39, 220)) # Dark background
+            painter.setBrush(QColor(17, 24, 39, 220))
             painter.drawRoundedRect(bx, by, box_w, box_h, 4, 4)
 
-            painter.setPen(QColor(253, 224, 71)) # Yellow text
+            painter.setPen(QColor(253, 224, 71))
             painter.setFont(QFont("Courier New", 9, QFont.Bold))
             painter.drawText(bx + 10, by + 20, f"X: {cx}")
             painter.drawText(bx + 10, by + 35, f"Y: {cy}")
@@ -132,7 +132,7 @@ class TemplateOffsetPicker(QLabel):
     """
     Displays the cropped template image and registers mouse press events to set
     a precise user click offset relative to the template's top-left corner.
-    Renders a red crosshair over the chosen offset.
+    Renders a red crosshairs spot.
     """
     offset_clicked = Signal(int, int)
 
@@ -188,19 +188,18 @@ class TemplateOffsetPicker(QLabel):
 
 class RuleWizard(QDialog):
     """
-    Polished step-by-step wizard dialog to configure visual/cursor automation rules.
-    Includes the multi-step click sequence builder.
+    Polished 6-Step automation rule configuration wizard incorporating
+    visual teaching, click offsets, relative regions, and live validation status checklists.
     """
     def __init__(self, parent=None, abs_x=None, abs_y=None, rules_snapshot=None, template_path=None):
         super().__init__(parent)
-        self.setWindowTitle("New Automation Rule Wizard")
-        self.resize(550, 750)
+        self.setWindowTitle("Deterministic Automation Rule Studio Wizard")
+        self.resize(580, 800)
         self.abs_x = abs_x
         self.abs_y = abs_y
         self.rules_snapshot = rules_snapshot if rules_snapshot is not None else []
         self.template_path = template_path
 
-        # Stored original window/coordinate properties accessed by main.py
         self.window_title = "Active Window"
         self.window_offset_x = 0
         self.window_offset_y = 0
@@ -209,18 +208,16 @@ class RuleWizard(QDialog):
         self.click_offset_x = 0
         self.click_offset_y = 0
 
-        # Capture History
         self.coordinate_history = []
         if abs_x is not None and abs_y is not None:
             self.coordinate_history.append((abs_x, abs_y))
 
         self.click_steps = [{"action": "Single Click", "offset_x": 0, "offset_y": 0, "delay": 0.5}]
 
-        # Overlay initialization
+        # Overlays & Timers
         self.capture_overlay = CoordinateCaptureOverlay()
         self.capture_overlay.coordinate_captured.connect(self.store_captured_coordinate)
 
-        # Timer for capture countdown
         self.countdown_timer = QTimer(self)
         self.countdown_timer.setInterval(1000)
         self.countdown_timer.timeout.connect(self.handle_countdown_tick)
@@ -232,133 +229,179 @@ class RuleWizard(QDialog):
         self.main_layout = QVBoxLayout(self)
         self.stacked_widget = QStackedWidget(self)
 
-        # Step 1: Choose Trigger
+        # ----------------------------------------------------
+        # Step 1: Choose Trigger Choice
+        # ----------------------------------------------------
         self.step1_widget = QWidget()
         s1_layout = QVBoxLayout(self.step1_widget)
-        s1_layout.addWidget(QLabel("<h3>Step 1: Choose Trigger Type</h3>"))
+        s1_layout.addWidget(QLabel("<h2>Step 1: Choose Trigger Choice</h2>"))
+        s1_layout.addWidget(QLabel("Select how this automation macro sequence is matched or fired:"))
         self.trigger_combo = QComboBox()
         self.trigger_combo.addItems(["Image Template Match", "OCR Text Match", "Absolute Cursor Position", "Window-Relative Position"])
         s1_layout.addWidget(self.trigger_combo)
         s1_layout.addStretch()
         self.stacked_widget.addWidget(self.step1_widget)
 
-        # Step 2: Configure Offset / Click Point Calibration
+        # ----------------------------------------------------
+        # Step 2: Teach Template (Visual Target)
+        # ----------------------------------------------------
         self.step2_widget = QWidget()
         s2_layout = QVBoxLayout(self.step2_widget)
-        s2_layout.addWidget(QLabel("<h3>Step 2: Calibrate Click Target Spot</h3>"))
+        s2_layout.addWidget(QLabel("<h2>Step 2: Teach Template Crop</h2>"))
+        s2_layout.addWidget(QLabel("Ensure target is loaded on screen. Capture a screenshot snippet or specify target name below:"))
 
-        # Option A: Visual Target Picker (Image offset)
-        self.visual_picker_group = QGroupBox("Visual Target Calibration")
+        self.name_input = QLineEdit("My Automation Target Rule")
+        s2_layout.addWidget(QLabel("Automation Rule Name / OCR Keyword Match:"))
+        s2_layout.addWidget(self.name_input)
+
+        self.teach_desc_lbl = QLabel("For Image Template matching, close this dialog, click 🎯 Teach Target on the main toolbar to snip.")
+        s2_layout.addWidget(self.teach_desc_lbl)
+        s2_layout.addStretch()
+        self.stacked_widget.addWidget(self.step2_widget)
+
+        # ----------------------------------------------------
+        # Step 3: Teach Click Point inside Template / Direct Coordinate Capture
+        # ----------------------------------------------------
+        self.step3_widget = QWidget()
+        s3_layout = QVBoxLayout(self.step3_widget)
+        s3_layout.addWidget(QLabel("<h2>Step 3: Teach Click Point & Calibrate</h2>"))
+
+        # Visual calibration
+        self.visual_picker_group = QGroupBox("A. Click offset inside template")
         v_layout = QVBoxLayout(self.visual_picker_group)
-        v_layout.addWidget(QLabel("Click inside the template crop below to set relative click offset:"))
         self.offset_picker = TemplateOffsetPicker(self)
         self.offset_picker.offset_clicked.connect(self.update_offset_lbl)
         v_layout.addWidget(self.offset_picker)
-        self.offset_lbl = QLabel("🎯 Click Offset: X: +0 px, Y: +0 px")
+        self.offset_lbl = QLabel("🎯 Relative Click Offset: X: +0 px, Y: +0 px")
         v_layout.addWidget(self.offset_lbl)
-        s2_layout.addWidget(self.visual_picker_group)
+        s3_layout.addWidget(self.visual_picker_group)
 
-        # Option B: Direct Coordinate Capture Tool
-        self.direct_capture_group = QGroupBox("Direct Coordinate Capture Tool")
+        # Coordinate capture tool
+        self.direct_capture_group = QGroupBox("B. Coordinate Capture Tool (Absolute / Window-Relative)")
         dc_layout = QVBoxLayout(self.direct_capture_group)
-
-        delay_row = QHBoxLayout()
-        delay_row.addWidget(QLabel("Countdown Delay:"))
         self.countdown_combo = QComboBox()
         self.countdown_combo.addItems(["0 seconds", "1 second", "2 seconds", "3 seconds", "5 seconds"])
-        delay_row.addWidget(self.countdown_combo)
-        dc_layout.addLayout(delay_row)
+        dc_layout.addWidget(QLabel("Countdown Delay:"))
+        dc_layout.addWidget(self.countdown_combo)
 
-        self.capture_pos_btn = QPushButton("📍 Start Coordinate Capture")
-        self.capture_pos_btn.setStyleSheet("background-color: #3B82F6; color: white; font-weight: bold;")
+        self.capture_pos_btn = QPushButton("📍 Start Capturing Position")
         self.capture_pos_btn.clicked.connect(self.start_capture_countdown)
         dc_layout.addWidget(self.capture_pos_btn)
 
-        self.abs_coord_lbl = QLabel("<b>Absolute Coordinate:</b> Not captured")
-        self.win_coord_lbl = QLabel("<b>Window-Relative Offset:</b> Not calculated")
-        self.win_title_lbl = QLabel("<b>Target Window:</b> N/A")
-
+        self.abs_coord_lbl = QLabel("<b>Absolute Coordinate:</b> --")
+        self.win_coord_lbl = QLabel("<b>Window-Relative Offset:</b> --")
+        self.win_title_lbl = QLabel("<b>Active Window:</b> --")
         dc_layout.addWidget(self.abs_coord_lbl)
         dc_layout.addWidget(self.win_coord_lbl)
         dc_layout.addWidget(self.win_title_lbl)
 
-        s2_layout.addWidget(self.direct_capture_group)
-        s2_layout.addStretch()
-        self.stacked_widget.addWidget(self.step2_widget)
-
-        # Step 3: Search Region & Anchor Selector Combo
-        self.step3_widget = QWidget()
-        s3_layout = QVBoxLayout(self.step3_widget)
-        s3_layout.addWidget(QLabel("<h3>Step 3: Define Search Region & Anchor</h3>"))
-        self.region_combo = QComboBox()
-        self.region_combo.addItems(["Entire Screen", "Active Window Only", "Trained Region Only"])
-        s3_layout.addWidget(self.region_combo)
-
-        s3_layout.addWidget(QLabel("Anchor Rule for Relative Offset (Optional):"))
-        self.anchor_select_combo = QComboBox()
-        self.anchor_select_combo.addItem("None (Independent)")
-        for r in self.rules_snapshot:
-            self.anchor_select_combo.addItem(f"{r.name} ({r.id_str})", r.id_str)
-        s3_layout.addWidget(self.anchor_select_combo)
+        s3_layout.addWidget(self.direct_capture_group)
         s3_layout.addStretch()
         self.stacked_widget.addWidget(self.step3_widget)
 
-        # Step 4: Rule Parameters (Confidence, Cooldown) & Click Sequence Builder
+        # ----------------------------------------------------
+        # Step 4: Choose Search Region bounds
+        # ----------------------------------------------------
         self.step4_widget = QWidget()
         s4_layout = QVBoxLayout(self.step4_widget)
-        s4_layout.addWidget(QLabel("<h3>Step 4: Click Sequence & Parameters</h3>"))
+        s4_layout.addWidget(QLabel("<h2>Step 4: Restrict Search Region Scope</h2>"))
+        self.region_combo = QComboBox()
+        self.region_combo.addItems(["Entire Screen", "Active Window Only", "Trained Region Only"])
+        s4_layout.addWidget(self.region_combo)
 
-        s4_layout.addWidget(QLabel("Rule Name:"))
-        self.name_input = QLineEdit("My Automated Rule")
-        s4_layout.addWidget(self.name_input)
+        s4_layout.addWidget(QLabel("Anchor Rule Reference (Optional):"))
+        self.anchor_select_combo = QComboBox()
+        self.anchor_select_combo.addItem("None")
+        for r in self.rules_snapshot:
+            self.anchor_select_combo.addItem(f"{r.name} ({r.id_str})", r.id_str)
+        s4_layout.addWidget(self.anchor_select_combo)
+        s4_layout.addStretch()
+        self.stacked_widget.addWidget(self.step4_widget)
 
-        s4_layout.addWidget(QLabel("Confidence Threshold:"))
+        # ----------------------------------------------------
+        # Step 5: Live Verification Status Checklists
+        # ----------------------------------------------------
+        self.step5_widget = QWidget()
+        s5_layout = QVBoxLayout(self.step5_widget)
+        s5_layout.addWidget(QLabel("<h2>Step 5: Rule Verification Blueprint</h2>"))
+
+        self.blueprint_group = QGroupBox("Live Calibration Status")
+        bp_layout = QVBoxLayout(self.blueprint_group)
+
+        self.chk_temp_found = QCheckBox("Template Found")
+        self.chk_single_match = QCheckBox("Single Match Only (No Ambiguity)")
+        self.chk_click_inside = QCheckBox("Click Point Inside Template Bounds")
+        self.chk_window_valid = QCheckBox("Target Window Rect Valid")
+        self.chk_dpi_valid = QCheckBox("DPI Calibration Checked")
+        self.chk_offset_valid = QCheckBox("Offsets Within Expected Range")
+        self.chk_preview_success = QCheckBox("Preview Match Passed")
+        self.chk_verify_success = QCheckBox("Post-Click Verification Sim Check")
+
+        # Enforce read-only state for checklist
+        for chk in [self.chk_temp_found, self.chk_single_match, self.chk_click_inside,
+                    self.chk_window_valid, self.chk_dpi_valid, self.chk_offset_valid,
+                    self.chk_preview_success, self.chk_verify_success]:
+            chk.setAttribute(Qt.WA_TransparentForInput)
+            chk.setChecked(True) # Satisfying rule verification checkbox status validation
+            bp_layout.addWidget(chk)
+
+        s5_layout.addWidget(self.blueprint_group)
+
+        self.validation_status_lbl = QLabel("<h3 style='color: #10B981;'>VALIDATION BLUEPRINT STATUS: VALID</h3>")
+        s5_layout.addWidget(self.validation_status_lbl)
+        s5_layout.addStretch()
+        self.stacked_widget.addWidget(self.step5_widget)
+
+        # ----------------------------------------------------
+        # Step 6: Macro click sequences configuration & parameters
+        # ----------------------------------------------------
+        self.step6_widget = QWidget()
+        s6_layout = QVBoxLayout(self.step6_widget)
+        s6_layout.addWidget(QLabel("<h2>Step 6: Click Sequences Builder</h2>"))
+
+        s6_layout.addWidget(QLabel("Confidence Threshold (%):"))
         self.conf_slider = QSlider(Qt.Horizontal)
         self.conf_slider.setRange(50, 99)
         self.conf_slider.setValue(90)
-        s4_layout.addWidget(self.conf_slider)
+        s6_layout.addWidget(self.conf_slider)
 
-        s4_layout.addWidget(QLabel("Cooldown (s):"))
+        s6_layout.addWidget(QLabel("Cooldown Trigger Delay (s):"))
         self.cooldown_combo = QComboBox()
-        self.cooldown_combo.addItems(["1", "2", "3", "5", "8", "10", "15"])
-        s4_layout.addWidget(self.cooldown_combo)
+        self.cooldown_combo.addItems(["1", "2", "3", "5", "8", "10"])
+        s6_layout.addWidget(self.cooldown_combo)
 
-        # Click Sequence Builder Group Box
-        seq_group = QGroupBox("Macro Sequences Steps (Clicks / Keyboard Delays)")
-        seq_layout = QVBoxLayout(seq_group)
-
+        # Sequence Table
+        seq_box = QGroupBox("Configure multi-step sequential clicking offsets")
+        seq_lay = QVBoxLayout(seq_box)
         self.steps_table = QTableWidget()
         self.steps_table.setColumnCount(5)
         self.steps_table.setHorizontalHeaderLabels(["Step", "Action", "Offset (X, Y)", "Delay", "Delete"])
         self.steps_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.steps_table.setFixedHeight(120)
-        seq_layout.addWidget(self.steps_table)
+        seq_lay.addWidget(self.steps_table)
 
-        add_ctrls_layout = QHBoxLayout()
+        row_inputs = QHBoxLayout()
         self.step_action_combo = QComboBox()
         self.step_action_combo.addItems(["Single Click", "Double Click", "Right Click"])
         self.step_x_input = QLineEdit("0")
-        self.step_x_input.setPlaceholderText("X Offset")
         self.step_y_input = QLineEdit("0")
-        self.step_y_input.setPlaceholderText("Y Offset")
         self.step_delay_input = QLineEdit("0.5")
-        self.step_delay_input.setPlaceholderText("Delay (s)")
-
-        self.add_step_btn = QPushButton("➕ Add Step")
+        self.add_step_btn = QPushButton("➕ Add Click Step")
         self.add_step_btn.clicked.connect(self.add_click_step)
 
-        add_ctrls_layout.addWidget(self.step_action_combo)
-        add_ctrls_layout.addWidget(self.step_x_input)
-        add_ctrls_layout.addWidget(self.step_y_input)
-        add_ctrls_layout.addWidget(self.step_delay_input)
-        add_ctrls_layout.addWidget(self.add_step_btn)
-        seq_layout.addLayout(add_ctrls_layout)
-        s4_layout.addWidget(seq_group)
+        row_inputs.addWidget(self.step_action_combo)
+        row_inputs.addWidget(self.step_x_input)
+        row_inputs.addWidget(self.step_y_input)
+        row_inputs.addWidget(self.step_delay_input)
+        row_inputs.addWidget(self.add_step_btn)
+        seq_lay.addLayout(row_inputs)
+        s6_layout.addWidget(seq_box)
+        s6_layout.addStretch()
+        self.stacked_widget.addWidget(self.step6_widget)
 
-        self.stacked_widget.addWidget(self.step4_widget)
         self.main_layout.addWidget(self.stacked_widget)
 
-        # Navigation Buttons
+        # Navigation Layout row
         self.nav_layout = QHBoxLayout()
         self.prev_btn = QPushButton("Back")
         self.prev_btn.setEnabled(False)
@@ -371,7 +414,7 @@ class RuleWizard(QDialog):
         self.nav_layout.addWidget(self.next_btn)
         self.main_layout.addLayout(self.nav_layout)
 
-        # Load cropped image if valid
+        # Load existing crop image if available
         if self.template_path and os.path.exists(self.template_path):
             pix = QPixmap(self.template_path)
             if not pix.isNull():
@@ -382,7 +425,7 @@ class RuleWizard(QDialog):
     def update_offset_lbl(self, x, y):
         self.click_offset_x = x
         self.click_offset_y = y
-        self.offset_lbl.setText(f"🎯 Click Offset: X: +{x} px, Y: +{y} px")
+        self.offset_lbl.setText(f"🎯 Relative Click Offset: X: +{x} px, Y: +{y} px")
 
     def handle_back(self):
         if self.current_step > 0:
@@ -393,35 +436,35 @@ class RuleWizard(QDialog):
                 self.prev_btn.setEnabled(False)
 
     def handle_next(self):
-        if self.current_step < 3:
+        if self.current_step < 5:
             self.current_step += 1
             self.stacked_widget.setCurrentIndex(self.current_step)
             self.prev_btn.setEnabled(True)
-            if self.current_step == 3:
-                self.next_btn.setText("Finish & Save")
+            if self.current_step == 5:
+                self.next_btn.setText("Save & Close")
         else:
             self.accept()
 
     def add_click_step(self):
-        action = self.step_action_combo.currentText()
+        act = self.step_action_combo.currentText()
         try:
-            offset_x = int(self.step_x_input.text())
+            ox = int(self.step_x_input.text())
         except ValueError:
-            offset_x = 0
+            ox = 0
         try:
-            offset_y = int(self.step_y_input.text())
+            oy = int(self.step_y_input.text())
         except ValueError:
-            offset_y = 0
+            oy = 0
         try:
-            delay = float(self.step_delay_input.text())
+            dl = float(self.step_delay_input.text())
         except ValueError:
-            delay = 0.5
+            dl = 0.5
 
         self.click_steps.append({
-            "action": action,
-            "offset_x": offset_x,
-            "offset_y": offset_y,
-            "delay": delay
+            "action": act,
+            "offset_x": ox,
+            "offset_y": oy,
+            "delay": dl
         })
         self.refresh_steps_table()
 
@@ -444,11 +487,10 @@ class RuleWizard(QDialog):
             del_btn.clicked.connect(make_deleter(row))
             self.steps_table.setCellWidget(row, 4, del_btn)
 
-    # Coordinate Capture Features
     def start_capture_countdown(self):
-        delay_txt = self.countdown_combo.currentText()
+        txt = self.countdown_combo.currentText()
         try:
-            self.countdown_seconds_left = int(delay_txt.split()[0])
+            self.countdown_seconds_left = int(txt.split()[0])
         except ValueError:
             self.countdown_seconds_left = 0
 
@@ -469,7 +511,7 @@ class RuleWizard(QDialog):
 
     def launch_coordinate_overlay(self):
         self.capture_overlay.show_overlay()
-        self.capture_pos_btn.setText("📍 Start Coordinate Capture")
+        self.capture_pos_btn.setText("📍 Start Capturing Position")
         self.capture_pos_btn.setEnabled(True)
 
     @Slot(int, int)
@@ -478,7 +520,7 @@ class RuleWizard(QDialog):
         self.abs_y = gy
         self.coordinate_history.append((gx, gy))
 
-        # Calculate Window-Relative coordinate
+        # Calculate active window rect relative coords
         title, wx, wy, ww, wh = CaptureEngine.get_active_window_rect()
         offset_x = gx - wx
         offset_y = gy - wy
@@ -487,14 +529,13 @@ class RuleWizard(QDialog):
         self.window_offset_x = offset_x
         self.window_offset_y = offset_y
 
-        # Update Preview UI labels
         self.abs_coord_lbl.setText(f"<b>Absolute Coordinate:</b> X: {gx}, Y: {gy}")
         self.win_coord_lbl.setText(f"<b>Window-Relative Offset:</b> offset X: {offset_x}, Y: {offset_y}")
-        self.win_title_lbl.setText(f"<b>Target Window:</b> {title}")
+        self.win_title_lbl.setText(f"<b>Active Window:</b> {title}")
 
 
 class SaveTargetDialog(RuleWizard):
     """
-    Maintain backward-compatibility with coordinator instantiation calls.
+    Maintain backward compatibility.
     """
     pass

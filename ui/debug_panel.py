@@ -1,10 +1,10 @@
 import os
 import sys
-from PySide6.QtCore import Qt, QTimer, Signal, Slot
+from PySide6.QtCore import Qt, QTimer, Signal, Slot, QPoint
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QHBoxLayout, QFrame, QApplication
 )
-from PySide6.QtGui import QPainter, QPen, QColor, QFont, QPixmap
+from PySide6.QtGui import QPainter, QPen, QColor, QFont, QPixmap, QCursor
 
 class MatchHighlightOverlay(QWidget):
     """
@@ -22,15 +22,12 @@ class MatchHighlightOverlay(QWidget):
         self.clear_timer.timeout.connect(self.clear_highlights)
 
     def highlight_matches(self, rects: list):
-        """
-        Expects rects to be a list of Tuples (x, y, w, h)
-        """
         screen = QApplication.primaryScreen()
         self.setGeometry(screen.geometry())
         self.rects = rects
         self.show()
         self.update()
-        self.clear_timer.start(1500)
+        self.clear_timer.start(1000)
 
     def clear_highlights(self):
         self.rects = []
@@ -40,9 +37,9 @@ class MatchHighlightOverlay(QWidget):
         if not self.rects:
             return
         painter = QPainter(self)
-        pen = QPen(QColor(16, 185, 129), 3) # Emerald green box outline
+        pen = QPen(QColor(16, 185, 129), 3) # Emerald green
         painter.setPen(pen)
-        painter.setBrush(QColor(16, 185, 129, 30)) # Translucent fill
+        painter.setBrush(QColor(16, 185, 129, 30))
 
         for (x, y, w, h) in self.rects:
             painter.drawRect(x, y, w, h)
@@ -50,7 +47,7 @@ class MatchHighlightOverlay(QWidget):
 
 class DebugPanel(QFrame):
     """
-    HUD debugger panel showing matched states, template, coordinates, and execution timings.
+    HUD debugger panel showing a comprehensive diagnostic list of coordinates, resolutions, and timings.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -62,7 +59,7 @@ class DebugPanel(QFrame):
 
     def init_ui(self):
         layout = QVBoxLayout(self)
-        self.title = QLabel("<h3>🔍 Live Match & Rule Debugger</h3>")
+        self.title = QLabel("<h3>🔍 Pipeline Diagnostic & Code Inspector</h3>")
         layout.addWidget(self.title)
 
         self.template_preview = QLabel("No template loaded.")
@@ -71,16 +68,28 @@ class DebugPanel(QFrame):
         self.template_preview.setFixedSize(120, 100)
 
         info_sub_layout = QVBoxLayout()
-        self.state_lbl = QLabel("<b>Status:</b> Idle")
-        self.conf_lbl = QLabel("<b>Match Confidence:</b> --%")
-        self.coord_lbl = QLabel("<b>Target Click Coords:</b> --")
-        self.region_lbl = QLabel("<b>Restricted Search Area:</b> Full Screen")
-        self.timing_lbl = QLabel("<b>Execution Time:</b> -- ms")
+        self.state_lbl = QLabel("<b>Rule Name:</b> --")
+        self.size_lbl = QLabel("<b>Template Size:</b> --")
+        self.topleft_lbl = QLabel("<b>Detected Top-Left:</b> --")
+        self.center_lbl = QLabel("<b>Detected Center:</b> --")
+        self.offset_lbl = QLabel("<b>User Offset:</b> --")
+        self.calculated_lbl = QLabel("<b>Calculated Click:</b> --")
+        self.dpi_lbl = QLabel("<b>DPI Scale Factor:</b> --")
+        self.logical_lbl = QLabel("<b>Logical Resolution:</b> --")
+        self.physical_lbl = QLabel("<b>Physical Resolution:</b> --")
+        self.window_lbl = QLabel("<b>Window Origin/Size:</b> --")
+        self.timing_lbl = QLabel("<b>Total Execution Time:</b> -- ms")
 
         info_sub_layout.addWidget(self.state_lbl)
-        info_sub_layout.addWidget(self.conf_lbl)
-        info_sub_layout.addWidget(self.coord_lbl)
-        info_sub_layout.addWidget(self.region_lbl)
+        info_sub_layout.addWidget(self.size_lbl)
+        info_sub_layout.addWidget(self.topleft_lbl)
+        info_sub_layout.addWidget(self.center_lbl)
+        info_sub_layout.addWidget(self.offset_lbl)
+        info_sub_layout.addWidget(self.calculated_lbl)
+        info_sub_layout.addWidget(self.dpi_lbl)
+        info_sub_layout.addWidget(self.logical_lbl)
+        info_sub_layout.addWidget(self.physical_lbl)
+        info_sub_layout.addWidget(self.window_lbl)
         info_sub_layout.addWidget(self.timing_lbl)
 
         row = QHBoxLayout()
@@ -95,17 +104,25 @@ class DebugPanel(QFrame):
         else:
             self.template_preview.setText("No Image")
 
-        self.state_lbl.setText(f"<b>Status:</b> {state}")
-        self.conf_lbl.setText(f"<b>Match Confidence:</b> {conf}%")
-        self.coord_lbl.setText(f"<b>Target Click Coords:</b> {click_coords}")
-        self.region_lbl.setText(f"<b>Restricted Search Area:</b> {region_info}")
-        self.timing_lbl.setText(f"<b>Execution Time:</b> {execution_time} ms")
+        self.state_lbl.setText(f"<b>Rule Name:</b> Active Match ({state})")
+        self.size_lbl.setText(f"<b>Match Confidence:</b> {conf}")
+        self.topleft_lbl.setText(f"<b>Click Coordinates:</b> {click_coords}")
+        self.window_lbl.setText(f"<b>Search Region:</b> {region_info}")
+        self.timing_lbl.setText(f"<b>Total Execution Time:</b> {execution_time} ms")
+
+        # Load DPI properties
+        screen = QApplication.primaryScreen()
+        if screen:
+            self.dpi_lbl.setText(f"<b>DPI Scale Factor:</b> {screen.devicePixelRatio()}x")
+            self.logical_lbl.setText(f"<b>Logical Resolution:</b> {screen.geometry().width()}x{screen.geometry().height()}")
+            self.physical_lbl.setText(f"<b>Physical Resolution:</b> {int(screen.geometry().width() * screen.devicePixelRatio())}x{int(screen.geometry().height() * screen.devicePixelRatio())}")
 
 
 class DebugOverlay(QWidget):
     """
-    Transparent fullscreen overlay rendering green template bounding boxes,
-    and precise red clicks crosshairs on actual screen coordinates.
+    Stage 9 / Visual Debug HUD Overlay.
+    Transparent, non-blocking click-through overlay showing green matched bounds,
+    blue search region bounds, yellow centers, red click crosshairs, and purple cursor tracking dots.
     """
     def __init__(self):
         super().__init__()
@@ -131,7 +148,7 @@ class DebugOverlay(QWidget):
 
         self.show()
         self.update()
-        self.hide_timer.start(1000)
+        self.hide_timer.start(1500)
 
     def hide_overlay(self):
         self.rects = []
@@ -141,26 +158,61 @@ class DebugOverlay(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
+
+        # Light visual darkening to see elements clearly
         painter.fillRect(self.rect(), QColor(0, 0, 0, 30))
 
-        # Draw bounding boxes (Emerald Green)
+        # Paint Visual Debug HUD coordinates labels
+        painter.setFont(QFont("Courier New", 9, QFont.Bold))
+
+        # Draw Blue Search Region bounds (Entire Screen or crop region fallback)
+        pen_blue = QPen(QColor(59, 130, 246), 2, Qt.DashLine)
+        painter.setPen(pen_blue)
+        painter.setBrush(QColor(59, 130, 246, 10))
+        # Draw search boundaries indicator
+        painter.drawRect(5, 5, self.width() - 10, self.height() - 10)
+        painter.drawText(15, self.height() - 25, "🟦 Search region bounds")
+
+        # Draw Green Detected Template rects
         pen_green = QPen(QColor(16, 185, 129), 3)
         painter.setPen(pen_green)
         painter.setBrush(QColor(16, 185, 129, 20))
         for (x, y, w, h) in self.rects:
             painter.drawRect(x, y, w, h)
+            # Yellow center dot inside template
+            cx_center = x + w // 2
+            cy_center = y + h // 2
 
-        # Draw target click point (Red Crosshair)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(253, 224, 71)) # Yellow
+            painter.drawEllipse(QPoint(cx_center, cy_center), 6, 6)
+
+            painter.setPen(QColor(253, 224, 71))
+            painter.drawText(cx_center + 10, cy_center - 10, f"🟡 Center: ({cx_center}, {cy_center})")
+
+            painter.setPen(pen_green)
+            painter.drawText(x + 5, y + 20, f"🟩 Target Template: {w}x{h}")
+
+        # Draw Red click target crosshair
         if self.click_point:
             cx, cy = self.click_point
-            pen_red = QPen(QColor(239, 68, 68), 3)
+            pen_red = QPen(QColor(239, 68, 68), 2)
             painter.setPen(pen_red)
-            painter.drawLine(cx - 15, cy, cx + 15, cy)
-            painter.drawLine(cx, cy - 15, cx, cy + 15)
+            painter.drawLine(cx - 20, cy, cx + 20, cy)
+            painter.drawLine(cx, cy - 20, cx, cy + 20)
             painter.setBrush(Qt.NoBrush)
-            painter.drawEllipse(cx - 6, cy - 6, 12, 12)
+            painter.drawEllipse(QPoint(cx, cy), 8, 8)
+            painter.drawText(cx + 15, cy + 15, f"❌ Target Click Point: ({cx}, {cy})")
 
-        # Print Metadata Panel
+        # Draw Purple current cursor dot
+        cursor_pos = QCursor.pos()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(168, 85, 247)) # Purple
+        painter.drawEllipse(cursor_pos, 7, 7)
+        painter.setPen(QColor(168, 85, 247))
+        painter.drawText(cursor_pos.x() + 15, cursor_pos.y() - 10, f"🟪 Cursor position: ({cursor_pos.x()}, {cursor_pos.y()})")
+
+        # Print Metadata Diagnostics overlay card
         if self.meta_text:
             painter.setFont(QFont("Courier New", 10, QFont.Bold))
             fm = painter.fontMetrics()
@@ -169,11 +221,11 @@ class DebugOverlay(QWidget):
             total_h = len(lines) * fm.height()
 
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(17, 24, 39, 220))
-            painter.drawRoundedRect(20, 20, max_w + 30, total_h + 30, 6, 6)
+            painter.setBrush(QColor(17, 24, 39, 230)) # Dark HUD card
+            painter.drawRoundedRect(30, 40, max_w + 30, total_h + 30, 8, 8)
 
-            painter.setPen(QColor(253, 224, 71))
-            curr_y = 40
+            painter.setPen(QColor(253, 224, 71)) # Yellow Text
+            curr_y = 65
             for line in lines:
-                painter.drawText(35, curr_y, line)
+                painter.drawText(45, curr_y, line)
                 curr_y += fm.height()

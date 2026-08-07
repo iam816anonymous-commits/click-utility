@@ -1,4 +1,5 @@
 import pyautogui
+import time
 from pynput import keyboard
 from PySide6.QtCore import QObject, Signal
 from typing import Optional
@@ -9,8 +10,9 @@ pyautogui.FAILSAFE = True  # Move mouse to corner to abort
 
 class ClickEngine(QObject):
     """
-    Handles mouse click dispatch, macro sequence delays, and global hotkeys triggers.
-    Inherits from QObject to safely emit Qt Signals when hotkeys are triggered from a background thread.
+    Stage 7 - Re-written Smart Click Engine.
+    Handles precise mouse movement verification, retries, click dispatch,
+    and global hotkeys triggers with fast Esc-driven emergency recovery.
     """
     start_signal = Signal()
     stop_signal = Signal()
@@ -22,50 +24,80 @@ class ClickEngine(QObject):
         super().__init__()
         self.listener: Optional[keyboard.Listener] = None
 
-    def trigger_click(self, x: int, y: int, action_type: str = "Left Click"):
+    def safe_move_to(self, x: int, y: int, max_retries: int = 3) -> bool:
         """
-        Synthesizes a highly precise physical mouse click event at screen coordinate (x, y)
-        by using moveTo() + mouseDown() + mouseUp() sequences with micro-delays to eliminate
-        coordinate drift caused by high DPI scaling setups.
+        Moves the cursor to (x, y) and verifies the position with retries.
+        If actual vs requested coordinates differ by > 3 pixels, retries.
         """
-        import time
+        for attempt in range(max_retries):
+            pyautogui.moveTo(x, y, duration=0)
+            time.sleep(0.02) # Wait 20ms
 
-        # Save original cursor position to restore after clicking (human-like)
+            act_x, act_y = pyautogui.position()
+            diff_x = abs(act_x - x)
+            diff_y = abs(act_y - y)
+
+            if diff_x <= 3 and diff_y <= 3:
+                return True
+
+            print(f"[ClickEngine] MoveTo target mismatch. Target: ({x}, {y}), Actual: ({act_x}, {act_y}). Retry attempt {attempt + 1}")
+            time.sleep(0.05)
+
+        return False
+
+    def trigger_click(self, x: int, y: int, action_type: str = "Left Click") -> bool:
+        """
+        Synthesizes a highly precise physical mouse click event at screen coordinate (x, y).
+        Performs move-verification before clicking.
+        """
+        # Save original cursor position to restore after clicking
         ox, oy = pyautogui.position()
 
-        if action_type == "Left Click":
-            pyautogui.moveTo(x, y, duration=0)
-            time.sleep(0.02)
-            pyautogui.mouseDown(button='left')
-            time.sleep(0.02)
-            pyautogui.mouseUp(button='left')
-        elif action_type == "Double Click":
-            # Highly precise double-click
-            pyautogui.moveTo(x, y, duration=0)
-            time.sleep(0.02)
-            pyautogui.mouseDown(button='left')
-            time.sleep(0.01)
-            pyautogui.mouseUp(button='left')
-            time.sleep(0.05)
-            pyautogui.mouseDown(button='left')
-            time.sleep(0.01)
-            pyautogui.mouseUp(button='left')
-        elif action_type == "Right Click":
-            pyautogui.moveTo(x, y, duration=0)
-            time.sleep(0.02)
-            pyautogui.mouseDown(button='right')
-            time.sleep(0.02)
-            pyautogui.mouseUp(button='right')
-        else:
-            # Default fallback left click
-            pyautogui.moveTo(x, y, duration=0)
-            time.sleep(0.02)
-            pyautogui.mouseDown(button='left')
-            time.sleep(0.02)
-            pyautogui.mouseUp(button='left')
+        # Verify and Move
+        moved = self.safe_move_to(x, y)
+        if not moved:
+            print(f"[ClickEngine] CRITICAL: Mouse move-verification failed for coordinate ({x}, {y})!")
+            return False
 
-        # Restore original cursor spot
-        pyautogui.moveTo(ox, oy, duration=0.1)
+        try:
+            if action_type == "Left Click":
+                pyautogui.mouseDown(button='left')
+                time.sleep(0.02)
+                pyautogui.mouseUp(button='left')
+            elif action_type == "Double Click":
+                # Precise double-click sequence
+                pyautogui.mouseDown(button='left')
+                time.sleep(0.01)
+                pyautogui.mouseUp(button='left')
+                time.sleep(0.05)
+                pyautogui.mouseDown(button='left')
+                time.sleep(0.01)
+                pyautogui.mouseUp(button='left')
+            elif action_type == "Right Click":
+                pyautogui.mouseDown(button='right')
+                time.sleep(0.02)
+                pyautogui.mouseUp(button='right')
+            else:
+                # Default left click
+                pyautogui.mouseDown(button='left')
+                time.sleep(0.02)
+                pyautogui.mouseUp(button='left')
+        finally:
+            # Restore original cursor spot gently
+            pyautogui.moveTo(ox, oy, duration=0.1)
+
+        return True
+
+    def release_all_buttons(self):
+        """
+        Safety Release: Ensures any stuck mouse buttons are explicitly released.
+        """
+        try:
+            pyautogui.mouseUp(button='left')
+            pyautogui.mouseUp(button='right')
+            print("[ClickEngine] Safety release activated: All mouse buttons released.")
+        except Exception as e:
+            print(f"[ClickEngine] Error during safety mouse release: {e}")
 
     def start_hotkeys_listener(self):
         """
