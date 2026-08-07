@@ -16,7 +16,7 @@ class MacroRule:
     """
     Data model representing a visual macro click rule.
     """
-    def __init__(self, id_str: str, name: str, trigger_type: str, action: str, cooldown: float, threshold: float, template_path: str, click_steps: list = None, abs_x: int = None, abs_y: int = None, window_title: str = None, window_offset_x: int = None, window_offset_y: int = None, window_handle: int = None, countdown_delay: int = None, coordinate_history: list = None, search_region: str = "Entire Screen", anchor_rule_id: str = None, train_x: int = None, train_y: int = None, train_w: int = None, train_h: int = None):
+    def __init__(self, id_str: str, name: str, trigger_type: str, action: str, cooldown: float, threshold: float, template_path: str, click_steps: list = None, abs_x: int = None, abs_y: int = None, window_title: str = None, window_offset_x: int = None, window_offset_y: int = None, window_handle: int = None, countdown_delay: int = None, coordinate_history: list = None, search_region: str = "Entire Screen", anchor_rule_id: str = None, train_x: int = None, train_y: int = None, train_w: int = None, train_h: int = None, use_edges: bool = False):
         self.id_str = id_str
         self.name = name
         self.trigger_type = trigger_type
@@ -38,6 +38,7 @@ class MacroRule:
         self.train_y = train_y
         self.train_w = train_w
         self.train_h = train_h
+        self.use_edges = use_edges
         self.active = True
         self.last_triggered = 0.0
 
@@ -107,7 +108,7 @@ class MonitoringWorker(QThread):
                             anchor_temp = cv2.imread(anchor_rule.template_path, cv2.IMREAD_COLOR)
                             if anchor_temp is not None:
                                 # Match anchor on screen
-                                anchor_match = MatchEngine.match_template(screen, anchor_temp, threshold=anchor_rule.threshold)
+                                anchor_match = MatchEngine.match_template(screen, anchor_temp, threshold=anchor_rule.threshold, use_edges=anchor_rule.use_edges)
                                 if anchor_match:
                                     acx, acy, aconf = anchor_match
                                     # Anchor training center
@@ -195,7 +196,7 @@ class MonitoringWorker(QThread):
                                 else:
                                     search_area = latest_screen
 
-                            matches = MatchEngine.match_template_multi(search_area, template, threshold=rule.threshold)
+                            matches = MatchEngine.match_template_multi(search_area, template, threshold=rule.threshold, use_edges=rule.use_edges)
                             if matches:
                                 break
 

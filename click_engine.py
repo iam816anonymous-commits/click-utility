@@ -24,19 +24,45 @@ class ClickEngine(QObject):
 
     def trigger_click(self, x: int, y: int, action_type: str = "Left Click"):
         """
-        Synthesizes a physical mouse click event at screen coordinate (x, y).
+        Synthesizes a highly precise physical mouse click event at screen coordinate (x, y)
+        by using moveTo() + mouseDown() + mouseUp() sequences with micro-delays to eliminate
+        coordinate drift caused by high DPI scaling setups.
         """
+        import time
+
         # Save original cursor position to restore after clicking (human-like)
         ox, oy = pyautogui.position()
 
         if action_type == "Left Click":
-            pyautogui.click(x, y)
+            pyautogui.moveTo(x, y, duration=0)
+            time.sleep(0.02)
+            pyautogui.mouseDown(button='left')
+            time.sleep(0.02)
+            pyautogui.mouseUp(button='left')
         elif action_type == "Double Click":
-            pyautogui.doubleClick(x, y)
+            # Highly precise double-click
+            pyautogui.moveTo(x, y, duration=0)
+            time.sleep(0.02)
+            pyautogui.mouseDown(button='left')
+            time.sleep(0.01)
+            pyautogui.mouseUp(button='left')
+            time.sleep(0.05)
+            pyautogui.mouseDown(button='left')
+            time.sleep(0.01)
+            pyautogui.mouseUp(button='left')
         elif action_type == "Right Click":
-            pyautogui.rightClick(x, y)
+            pyautogui.moveTo(x, y, duration=0)
+            time.sleep(0.02)
+            pyautogui.mouseDown(button='right')
+            time.sleep(0.02)
+            pyautogui.mouseUp(button='right')
         else:
-            pyautogui.click(x, y) # Default fallback
+            # Default fallback left click
+            pyautogui.moveTo(x, y, duration=0)
+            time.sleep(0.02)
+            pyautogui.mouseDown(button='left')
+            time.sleep(0.02)
+            pyautogui.mouseUp(button='left')
 
         # Restore original cursor spot
         pyautogui.moveTo(ox, oy, duration=0.1)

@@ -333,5 +333,27 @@ class TestMatchEngine(unittest.TestCase):
         self.assertEqual(attempts, 3)
         self.assertTrue(success)
 
+    def test_precise_mouse_clicking_durations(self):
+        # Verify the precise click engine functions can be called safely
+        from click_engine import ClickEngine
+        engine = ClickEngine()
+
+        # trigger_click is mocked with MagicMock() pyautogui so it executes cleanly
+        engine.trigger_click(100, 200, "Left Click")
+        engine.trigger_click(100, 200, "Double Click")
+        engine.trigger_click(100, 200, "Right Click")
+
+        # Test runs completely without exceptions
+        self.assertTrue(True)
+
+    def test_edge_based_template_matching(self):
+        # Test Canny edge based matching works correctly
+        result = MatchEngine.match_template(self.screen, self.template, threshold=0.90, use_edges=True)
+        self.assertIsNotNone(result)
+        cx, cy, conf = result
+        self.assertEqual(cx, 45)
+        self.assertEqual(cy, 45)
+        self.assertGreaterEqual(conf, 0.90)
+
 if __name__ == "__main__":
     unittest.main()

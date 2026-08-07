@@ -12,18 +12,33 @@ class MatchEngine:
     def match_template(
         screen_bgr: np.ndarray,
         template_bgr: np.ndarray,
-        threshold: float = 0.85
+        threshold: float = 0.85,
+        use_edges: bool = False
     ) -> Optional[Tuple[int, int, float]]:
         """
         Searches for a template_bgr image within screen_bgr.
+        Supports use_edges parameter using Canny Edge detection to reduce false-positive rates
+        when matching similar UI elements with gray borders and white paddings.
         Returns:
             Tuple of (center_x, center_y, confidence) if matched above threshold, else None.
         """
         if template_bgr.shape[0] > screen_bgr.shape[0] or template_bgr.shape[1] > screen_bgr.shape[1]:
             return None
 
-        # TM_CCOEFF_NORMED gives a confidence score between -1 and 1 (1 is perfect match)
-        result = cv2.matchTemplate(screen_bgr, template_bgr, cv2.TM_CCOEFF_NORMED)
+        if use_edges:
+            # Convert screen and template to grayscale then apply Canny edge detector
+            scr_gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
+            tmp_gray = cv2.cvtColor(template_bgr, cv2.COLOR_BGR2GRAY)
+
+            scr_edges = cv2.Canny(scr_gray, 80, 150)
+            tmp_edges = cv2.Canny(tmp_gray, 80, 150)
+
+            # Match edge images using Normalized Cross-Correlation
+            result = cv2.matchTemplate(scr_edges, tmp_edges, cv2.TM_CCOEFF_NORMED)
+        else:
+            # Standard color template matching
+            result = cv2.matchTemplate(screen_bgr, template_bgr, cv2.TM_CCOEFF_NORMED)
+
         _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
         if max_val >= threshold:
@@ -87,17 +102,29 @@ class MatchEngine:
         screen_bgr: np.ndarray,
         template_bgr: np.ndarray,
         threshold: float = 0.85,
-        max_matches: int = 10
+        max_matches: int = 10,
+        use_edges: bool = False
     ) -> list[Tuple[int, int, float]]:
         """
         Finds multiple distinct non-overlapping occurrences of template_bgr in screen_bgr.
+        Supports use_edges parameter using Canny Edge detection to reduce false-positive rates
+        when matching similar UI elements with gray borders and white paddings.
         Returns:
             List of Tuples of (center_x, center_y, confidence) sorted by confidence.
         """
         if template_bgr.shape[0] > screen_bgr.shape[0] or template_bgr.shape[1] > screen_bgr.shape[1]:
             return []
 
-        result = cv2.matchTemplate(screen_bgr, template_bgr, cv2.TM_CCOEFF_NORMED)
+        if use_edges:
+            scr_gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
+            tmp_gray = cv2.cvtColor(template_bgr, cv2.COLOR_BGR2GRAY)
+
+            scr_edges = cv2.Canny(scr_gray, 80, 150)
+            tmp_edges = cv2.Canny(tmp_gray, 80, 150)
+
+            result = cv2.matchTemplate(scr_edges, tmp_edges, cv2.TM_CCOEFF_NORMED)
+        else:
+            result = cv2.matchTemplate(screen_bgr, template_bgr, cv2.TM_CCOEFF_NORMED)
 
         # Find all local maxima locations above threshold
         loc = np.where(result >= threshold)
