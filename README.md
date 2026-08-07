@@ -1,4 +1,4 @@
-# 🎯 Professional Calibrated Native Automation Studio
+# 🎯 Calibrated Native Automation Studio & Desktop Utility
 
 > An ultra-performant, calibrated **Windows-native desktop automation studio and workflow engine** designed as a highly reliable, modular replacement for Power Automate and UiPath. Built using Python, PySide6 (Qt6), OpenCV, MSS, pynput, and Tesseract OCR.
 
