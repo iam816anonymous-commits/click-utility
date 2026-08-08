@@ -10,12 +10,18 @@ class AutomationStudioApplication:
     def __init__(self, argv: list):
         self.app = QApplication(argv)
         self.running = False
+        self.coordinator = None
 
     def start(self) -> int:
         self.running = True
         run_startup_sequence()
 
-        # Start GUI (Stubs for main window)
+        # Load Application Coordinator and show main GUI dashboard
+        from automation_studio.controllers.application_controller import ApplicationCoordinator
+        self.coordinator = ApplicationCoordinator(self)
+        self.coordinator.dashboard.show()
+        self.coordinator.start_hotkeys()
+
         print("[Lifecycle] Launching application main window...")
 
         # Run event loop
