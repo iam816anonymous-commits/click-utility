@@ -1,5 +1,8 @@
 import sys
 import os
+import cv2
+import json
+import numpy as np
 import threading
 import time
 from PySide6.QtCore import Slot, Qt, QObject
@@ -15,11 +18,12 @@ from ui import NativeDashboard, SaveTargetDialog, DebugOverlay, TeachOverlay, Ma
 
 class ApplicationCoordinator(QObject):
     """
-    Pure Application Coordinator and Bootstrapper.
-    Delegates all macro business logic and UI rendering updates to rule_controller.py.
+    Application Coordinator & Bootstrapper.
+    Provides local JSON rule persistence and signals routing.
     """
     def __init__(self, app_instance: QApplication):
         super().__init__()
+        print("[Startup] Initializing Calibrated Automation Studio Services...")
         self.app = app_instance
         self.capture_engine = CaptureEngine()
         self.rules: list[MacroRule] = []
@@ -35,15 +39,18 @@ class ApplicationCoordinator(QObject):
         self.click_engine = ClickEngine()
         self.monitor_thread = MonitoringWorker(self.capture_engine, self.rules, self.click_engine, self.lock)
 
-        # Instantiate Stage-based Rule Controller
+        # Instantiate Rule Controller passing rule persistence trigger
         self.rule_controller = RuleController(
-            self.dashboard, self.rules, self.lock, self.click_engine, self.capture_engine
+            self.dashboard, self.rules, self.lock, self.click_engine, self.capture_engine, self.save_rules_to_json
         )
 
         self.connect_signals()
 
+        # Load rules from JSON
+        self.load_rules_from_json()
+        print("[Startup] Initialization Sequence Complete. Application Ready.")
+
     def connect_signals(self):
-        # Bind Start/Stop and Teach toolbar buttons
         self.dashboard.start_btn.clicked.connect(self.start_monitoring)
         self.dashboard.stop_btn.clicked.connect(self.stop_monitoring)
         self.dashboard.teach_btn.clicked.connect(self.trigger_teach)
@@ -65,19 +72,79 @@ class ApplicationCoordinator(QObject):
 
         self.teach_overlay.region_selected.connect(self.handle_region_selected)
 
-        # Monitor Thread to UI bindings
+        # Monitor Thread Signals
         self.monitor_thread.log_signal.connect(self.dashboard.append_log)
         self.monitor_thread.click_signal.connect(self.perform_macro_click)
         self.monitor_thread.highlight_signal.connect(self.highlight_overlay.highlight_matches)
         self.monitor_thread.debug_overlay_signal.connect(self.debug_overlay.show_debug_info)
         self.monitor_thread.live_debug_signal.connect(self.handle_live_debug_update)
 
-        # ClickEngine F8/F9/F10 and Esc Hooks bindings
+        # ClickEngine Hotkey & Abort Signals
         self.click_engine.start_signal.connect(self.start_monitoring)
         self.click_engine.stop_signal.connect(self.stop_monitoring)
         self.click_engine.teach_signal.connect(self.trigger_teach)
         self.click_engine.teach_cursor_signal.connect(self.trigger_teach_cursor)
         self.click_engine.emergency_signal.connect(self.emergency_abort)
+
+    def save_rules_to_json(self):
+        """
+        Rule Persistence - Writes all rules to rules.json.
+        """
+        with self.lock:
+            data = []
+            for r in self.rules:
+                data.append({
+                    "id_str": r.id_str, "name": r.name, "trigger_type": r.trigger_type, "action": r.action,
+                    "cooldown": r.cooldown, "threshold": r.threshold, "template_path": r.template_path,
+                    "click_steps": r.click_steps, "abs_x": r.abs_x, "abs_y": r.abs_y, "window_title": r.window_title,
+                    "window_offset_x": r.window_offset_x, "window_offset_y": r.window_offset_y,
+                    "search_region": r.search_region, "anchor_rule_id": r.anchor_rule_id, "train_x": r.train_x,
+                    "train_y": r.train_y, "train_w": r.train_w, "train_h": r.train_h,
+                    "click_offset_x": r.click_offset_x, "click_offset_y": r.click_offset_y,
+                    "window_client_w": r.window_client_w, "window_client_h": r.window_client_h, "dpi_scale": r.dpi_scale,
+                    "calibration_correction_x": r.calibration_correction_x,
+                    "calibration_correction_y": r.calibration_correction_y, "active": r.active
+                })
+        try:
+            with open("rules.json", "w") as f:
+                json.dump(data, f, indent=4)
+            print("[Rule Persistence] Successfully saved rules to rules.json")
+        except Exception as e:
+            print(f"[Rule Persistence] Error saving rules: {e}")
+
+    def load_rules_from_json(self):
+        """
+        Rule Persistence - Loads rules from rules.json on startup.
+        """
+        if not os.path.exists("rules.json"):
+            return
+        try:
+            with open("rules.json", "r") as f:
+                data = json.load(f)
+            new_rules = []
+            for d in data:
+                rule = MacroRule(
+                    id_str=d["id_str"], name=d["name"], trigger_type=d["trigger_type"], action=d["action"],
+                    cooldown=d["cooldown"], threshold=d["threshold"], template_path=d["template_path"],
+                    click_steps=d.get("click_steps"), abs_x=d.get("abs_x"), abs_y=d.get("abs_y"),
+                    window_title=d.get("window_title"), window_offset_x=d.get("window_offset_x"), window_offset_y=d.get("window_offset_y"),
+                    search_region=d.get("search_region", "Entire Screen"), anchor_rule_id=d.get("anchor_rule_id"),
+                    train_x=d.get("train_x"), train_y=d.get("train_y"), train_w=d.get("train_w"), train_h=d.get("train_h"),
+                    click_offset_x=d.get("click_offset_x"), click_offset_y=d.get("click_offset_y"),
+                    window_client_w=d.get("window_client_w"), window_client_h=d.get("window_client_h"), dpi_scale=d.get("dpi_scale", 1.0),
+                    calibration_correction_x=d.get("calibration_correction_x", 0.0),
+                    calibration_correction_y=d.get("calibration_correction_y", 0.0)
+                )
+                rule.active = d.get("active", True)
+                new_rules.append(rule)
+            with self.lock:
+                self.rules.clear()
+                self.rules.extend(new_rules)
+            self.rule_controller.refresh_rules_table()
+            self.dashboard.template_manager.refresh_templates()
+            print(f"[Rule Persistence] Successfully loaded {len(new_rules)} rules from rules.json")
+        except Exception as e:
+            print(f"[Rule Persistence] Error loading rules: {e}")
 
     def launch_calibration_wizard(self):
         from ui.calibration_dialog import CalibrationWizard
@@ -91,6 +158,7 @@ class ApplicationCoordinator(QObject):
             for rule in self.rules:
                 rule.calibration_correction_x = correction_x
                 rule.calibration_correction_y = correction_y
+        self.save_rules_to_json()
         self.dashboard.append_log(f"[⚙️] Calibration factors configured: X: {correction_x}x, Y: {correction_y}x")
 
     @Slot()
@@ -128,7 +196,6 @@ class ApplicationCoordinator(QObject):
             click_steps = dialog.click_steps
             action = click_steps[0]["action"] if len(click_steps) == 1 else f"Sequence ({len(click_steps)} steps)"
             rule_id = f"rule_{int(time.time())}"
-
             anchor_rule_id = dialog.anchor_select_combo.currentData() if dialog.anchor_select_combo.currentIndex() > 0 else None
 
             new_rule = MacroRule(
@@ -139,12 +206,12 @@ class ApplicationCoordinator(QObject):
             )
             with self.lock:
                 self.rules.append(new_rule)
+            self.save_rules_to_json()
             self.rule_controller.refresh_rules_table()
             self.dashboard.append_log(f"[✓] Saved new rule: '{name}'")
 
     @Slot(int, int, int, int)
     def handle_region_selected(self, x: int, y: int, w: int, h: int):
-        # Handle Replace Template Action safely
         if self.rule_controller.replacing_rule_id:
             with self.lock:
                 for rule in self.rules:
@@ -157,6 +224,7 @@ class ApplicationCoordinator(QObject):
                         self.dashboard.append_log(f"[✓] Successfully replaced template for rule '{rule.name}'!")
                         break
             self.rule_controller.replacing_rule_id = None
+            self.save_rules_to_json()
             self.rule_controller.refresh_rules_table()
             self.dashboard.template_manager.refresh_templates()
             return
@@ -187,6 +255,7 @@ class ApplicationCoordinator(QObject):
             )
             with self.lock:
                 self.rules.append(new_rule)
+            self.save_rules_to_json()
             self.rule_controller.refresh_rules_table()
             self.dashboard.template_manager.refresh_templates()
             self.dashboard.append_log(f"[✓] Saved target rule: '{name}' template saved to {filepath}")
@@ -228,6 +297,7 @@ class ApplicationCoordinator(QObject):
 
     @Slot()
     def emergency_abort(self):
+        # Stage 10: Emergency Stop - Release buttons, stop monitoring, hide overlays
         self.stop_monitoring()
         self.click_engine.release_all_buttons()
         self.debug_overlay.hide_overlay()

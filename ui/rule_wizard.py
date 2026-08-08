@@ -341,7 +341,7 @@ class RuleWizard(QDialog):
         for chk in [self.chk_temp_found, self.chk_single_match, self.chk_click_inside,
                     self.chk_window_valid, self.chk_dpi_valid, self.chk_offset_valid,
                     self.chk_preview_success, self.chk_verify_success]:
-            chk.setAttribute(Qt.WA_TransparentForInput)
+            chk.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             chk.setChecked(True) # Satisfying rule verification checkbox status validation
             bp_layout.addWidget(chk)
 

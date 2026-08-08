@@ -12,13 +12,14 @@ class RuleController(QObject):
     Manages Macro Rules lists, database-like snapshot states, Rules UI tables rendering,
     rule editing/replaces, deletions, and triggering background Stress Tests.
     """
-    def __init__(self, dashboard, rules: list, lock, click_engine, capture_engine):
+    def __init__(self, dashboard, rules: list, lock, click_engine, capture_engine, save_rules_cb=None):
         super().__init__()
         self.dashboard = dashboard
         self.rules = rules
         self.lock = lock
         self.click_engine = click_engine
         self.capture_engine = capture_engine
+        self.save_rules_cb = save_rules_cb
 
         # State tracker for replace actions
         self.replacing_rule_id = None
@@ -46,7 +47,12 @@ class RuleController(QObject):
             chk.setChecked(rule.active)
 
             def make_active_updater(target_rule):
-                return lambda state: [setattr(target_rule, "active", state == Qt.Checked), self.refresh_rules_table()]
+                def updater(state):
+                    target_rule.active = (state == Qt.Checked)
+                    if self.save_rules_cb:
+                        self.save_rules_cb()
+                    self.refresh_rules_table()
+                return updater
 
             chk.stateChanged.connect(make_active_updater(rule))
             self.dashboard.rules_table.setCellWidget(row, 0, chk)
@@ -93,6 +99,8 @@ class RuleController(QObject):
                 except Exception:
                     pass
                 self.dashboard.append_log(f"[-] Deleted rule: '{rule_to_remove.name}'")
+        if self.save_rules_cb:
+            self.save_rules_cb()
         self.refresh_rules_table()
         self.dashboard.template_manager.refresh_templates()
 
