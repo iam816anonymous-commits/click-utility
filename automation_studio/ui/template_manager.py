@@ -31,9 +31,22 @@ class TemplateManager(QWidget):
 
         row = QHBoxLayout()
         self.replace_btn = QPushButton("🔄 Replace Template", self)
-        self.replace_btn.setStyleSheet("background-color: #3B82F6;")
+        self.replace_btn.setStyleSheet(
+            "QPushButton { background-color: #3B82F6; color: white; border-radius: 6px; padding: 6px; font-weight: bold; font-family: 'Segoe UI'; }"
+            "QPushButton:hover { background-color: #2563EB; }"
+            "QPushButton:pressed { background-color: #1D4ED8; }"
+        )
+        self.replace_btn.setToolTip("Re-trigger Teach Mode to replace the selected template image")
+        self.replace_btn.setAccessibleName("Replace selected template image")
+
         self.delete_btn = QPushButton("🗑️ Delete Template", self)
-        self.delete_btn.setStyleSheet("background-color: #EF4444;")
+        self.delete_btn.setStyleSheet(
+            "QPushButton { background-color: #EF4444; color: white; border-radius: 6px; padding: 6px; font-weight: bold; font-family: 'Segoe UI'; }"
+            "QPushButton:hover { background-color: #DC2626; }"
+            "QPushButton:pressed { background-color: #B91C1C; }"
+        )
+        self.delete_btn.setToolTip("Delete the selected template asset and its associated rule")
+        self.delete_btn.setAccessibleName("Delete selected template asset")
 
         row.addWidget(self.replace_btn)
         row.addWidget(self.delete_btn)

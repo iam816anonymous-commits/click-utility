@@ -80,6 +80,13 @@ class RuleController(QObject):
             self.dashboard.rules_table.setItem(row, 7, QTableWidgetItem(success_pct))
 
             del_btn = QPushButton("🗑️ Delete")
+            del_btn.setToolTip(f"Permanently delete rule '{rule.name}' and its associated assets")
+            del_btn.setAccessibleName(f"Delete rule {rule.name}")
+            del_btn.setStyleSheet(
+                "QPushButton { background-color: #EF4444; color: white; border-radius: 4px; padding: 4px; font-weight: bold; font-family: 'Segoe UI'; }"
+                "QPushButton:hover { background-color: #DC2626; }"
+                "QPushButton:pressed { background-color: #B91C1C; }"
+            )
             def make_rule_deleter(target_rule_id):
                 return lambda: self.delete_rule(target_rule_id)
             del_btn.clicked.connect(make_rule_deleter(rule.id_str))
@@ -88,6 +95,30 @@ class RuleController(QObject):
         print("[Dashboard] Rules table refreshed.")
 
     def delete_rule(self, rule_id: str):
+        if not rule_id:
+            return
+
+        rule_name = ""
+        with self.lock:
+            for r in self.rules:
+                if r.id_str == rule_id or (r.template_path and os.path.basename(r.template_path) == rule_id):
+                    rule_name = r.name
+                    break
+
+        if not rule_name:
+            return
+
+        from PySide6.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self.dashboard,
+            "Confirm Rule Deletion",
+            f"Are you sure you want to permanently delete the automation rule '{rule_name}'?\n\nThis will also remove any associated screen template assets.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
         with self.lock:
             rule_to_remove = None
             for r in self.rules:
