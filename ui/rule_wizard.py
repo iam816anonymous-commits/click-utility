@@ -1,4 +1,5 @@
 import os
+import time
 from PySide6.QtCore import Qt, Signal, Slot, QTimer
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -254,7 +255,13 @@ class RuleWizard(QDialog):
         s2_layout.addWidget(QLabel("Automation Rule Name / OCR Keyword Match:"))
         s2_layout.addWidget(self.name_input)
 
-        self.teach_desc_lbl = QLabel("For Image Template matching, close this dialog, click 🎯 Teach Target on the main toolbar to snip.")
+        # Interactive template crop capture button
+        self.wizard_teach_btn = QPushButton("🎯 Snip Template Target from Screen")
+        self.wizard_teach_btn.setStyleSheet("background-color: #3B82F6; color: white; font-weight: bold; font-size: 13px; padding: 10px;")
+        self.wizard_teach_btn.clicked.connect(self.handle_teach_template_click)
+        s2_layout.addWidget(self.wizard_teach_btn)
+
+        self.teach_desc_lbl = QLabel("For Image Template matching, click the button above to snip or use main toolbar.")
         s2_layout.addWidget(self.teach_desc_lbl)
         s2_layout.addStretch()
         self.stacked_widget.addWidget(self.step2_widget)
@@ -422,6 +429,39 @@ class RuleWizard(QDialog):
 
         self.refresh_steps_table()
 
+    def handle_teach_template_click(self):
+        """
+        Interactively hides the Rule Wizard dialog, launches TeachOverlay,
+        saves cropped template target, updates offset picker preview, and restores wizard.
+        """
+        print("[RuleWizard] Hiding wizard and launching interactive target crop...")
+        self.hide()
+
+        # Instantiate overlay
+        self.wizard_teach_overlay = TeachOverlay()
+        self.wizard_teach_overlay.region_selected.connect(self.handle_wizard_region_selected)
+        self.wizard_teach_overlay.show_overlay()
+
+    def handle_wizard_region_selected(self, x, y, w, h):
+        self.wizard_teach_overlay.close()
+
+        # Write template crop
+        temp_id = f"rule_temp_{int(time.time())}"
+        self.template_path = os.path.join("targets", f"{temp_id}.png")
+        CaptureEngine.get_instance().save_template(x, y, w, h, self.template_path)
+        print(f"[RuleWizard] Captured crop saved on disk at: {self.template_path}")
+
+        # Update template preview and set default click offsets
+        pix = QPixmap(self.template_path)
+        if not pix.isNull():
+            self.offset_picker.set_template_image(pix)
+            self.click_offset_x = w // 2
+            self.click_offset_y = h // 2
+            self.offset_lbl.setText(f"🎯 Relative Click Offset: X: +{self.click_offset_x} px, Y: +{self.click_offset_y} px")
+
+        # Restore wizard dialog
+        self.show()
+
     def update_offset_lbl(self, x, y):
         self.click_offset_x = x
         self.click_offset_y = y
@@ -521,7 +561,7 @@ class RuleWizard(QDialog):
         self.coordinate_history.append((gx, gy))
 
         # Calculate active window rect relative coords
-        title, wx, wy, ww, wh = CaptureEngine.get_active_window_rect()
+        title, wx, wy, ww, wh = CaptureEngine.get_instance().get_active_window_rect()
         offset_x = gx - wx
         offset_y = gy - wy
 

@@ -23,9 +23,9 @@ class ApplicationCoordinator(QObject):
     """
     def __init__(self, app_instance: QApplication):
         super().__init__()
-        print("[Startup] Initializing Calibrated Automation Studio Services...")
+        print("[Startup] [UI] Initializing Calibrated Automation Studio Services...")
         self.app = app_instance
-        self.capture_engine = CaptureEngine()
+        self.capture_engine = CaptureEngine.get_instance()
         self.rules: list[MacroRule] = []
         self.lock = threading.Lock()
 
@@ -36,7 +36,7 @@ class ApplicationCoordinator(QObject):
         self.highlight_overlay = MatchHighlightOverlay()
         self.debug_overlay = DebugOverlay()
 
-        self.click_engine = ClickEngine()
+        self.click_engine = ClickEngine.get_instance()
         self.monitor_thread = MonitoringWorker(self.capture_engine, self.rules, self.click_engine, self.lock)
 
         # Instantiate Rule Controller passing rule persistence trigger
@@ -48,7 +48,7 @@ class ApplicationCoordinator(QObject):
 
         # Load rules from JSON
         self.load_rules_from_json()
-        print("[Startup] Initialization Sequence Complete. Application Ready.")
+        print("[Startup] [UI] Initialization Sequence Complete. Application Ready.")
 
     def connect_signals(self):
         self.dashboard.start_btn.clicked.connect(self.start_monitoring)
@@ -108,9 +108,9 @@ class ApplicationCoordinator(QObject):
         try:
             with open("rules.json", "w") as f:
                 json.dump(data, f, indent=4)
-            print("[Rule Persistence] Successfully saved rules to rules.json")
+            print("[Rule Persistence] [RuleManager] Successfully saved rules to rules.json")
         except Exception as e:
-            print(f"[Rule Persistence] Error saving rules: {e}")
+            print(f"[Rule Persistence] [RuleManager] Error saving rules: {e}")
 
     def load_rules_from_json(self):
         """
@@ -142,9 +142,9 @@ class ApplicationCoordinator(QObject):
                 self.rules.extend(new_rules)
             self.rule_controller.refresh_rules_table()
             self.dashboard.template_manager.refresh_templates()
-            print(f"[Rule Persistence] Successfully loaded {len(new_rules)} rules from rules.json")
+            print(f"[Rule Persistence] [RuleManager] Successfully loaded {len(new_rules)} rules from rules.json")
         except Exception as e:
-            print(f"[Rule Persistence] Error loading rules: {e}")
+            print(f"[Rule Persistence] [RuleManager] Error loading rules: {e}")
 
     def launch_calibration_wizard(self):
         from ui.calibration_dialog import CalibrationWizard
@@ -159,28 +159,30 @@ class ApplicationCoordinator(QObject):
                 rule.calibration_correction_x = correction_x
                 rule.calibration_correction_y = correction_y
         self.save_rules_to_json()
-        self.dashboard.append_log(f"[⚙️] Calibration factors configured: X: {correction_x}x, Y: {correction_y}x")
+        self.dashboard.append_log(f"[⚙️] [RuleController] Calibration factors configured: X: {correction_x}x, Y: {correction_y}x")
 
     @Slot()
     def start_monitoring(self):
         if not self.monitor_thread.isRunning():
             self.monitor_thread.move_only = self.dashboard.move_only_chk.isChecked()
             self.monitor_thread.start()
-            self.dashboard.append_log("[▶] Screen Monitoring started.")
+            self.dashboard.append_log("[▶] [Worker] Screen Monitoring started.")
 
     @Slot()
     def stop_monitoring(self):
         if self.monitor_thread.isRunning():
             self.monitor_thread.stop()
             self.monitor_thread.wait()
-            self.dashboard.append_log("[⏸] Screen Monitoring stopped.")
+            self.dashboard.append_log("[⏸] [Worker] Screen Monitoring stopped.")
 
     @Slot()
     def trigger_teach(self):
+        self.dashboard.append_log("[UI] Teach target pressed.")
         self.teach_overlay.show_overlay()
 
     @Slot()
     def trigger_teach_cursor(self):
+        self.dashboard.append_log("[UI] Teach cursor pressed.")
         import pyautogui
         mx, my = pyautogui.position()
         with self.lock:
@@ -206,12 +208,15 @@ class ApplicationCoordinator(QObject):
             )
             with self.lock:
                 self.rules.append(new_rule)
+            print(f"[RuleController] Creating AutomationRule: '{name}'")
             self.save_rules_to_json()
             self.rule_controller.refresh_rules_table()
-            self.dashboard.append_log(f"[✓] Saved new rule: '{name}'")
+            self.dashboard.append_log(f"[✓] [RuleManager] Saved new rule: '{name}'")
 
     @Slot(int, int, int, int)
     def handle_region_selected(self, x: int, y: int, w: int, h: int):
+        self.dashboard.append_log(f"[Overlay] Region selected: X:{x}, Y:{y} [{w}x{h}]")
+
         if self.rule_controller.replacing_rule_id:
             with self.lock:
                 for rule in self.rules:
@@ -221,7 +226,7 @@ class ApplicationCoordinator(QObject):
                         rule.train_y = y
                         rule.train_w = w
                         rule.train_h = h
-                        self.dashboard.append_log(f"[✓] Successfully replaced template for rule '{rule.name}'!")
+                        self.dashboard.append_log(f"[✓] [Capture] Successfully replaced template for rule '{rule.name}'!")
                         break
             self.rule_controller.replacing_rule_id = None
             self.save_rules_to_json()
@@ -234,6 +239,7 @@ class ApplicationCoordinator(QObject):
         rule_id = f"rule_{int(time.time())}"
         filepath = os.path.join("targets", f"{rule_id}.png")
         self.capture_engine.save_template(x, y, w, h, filepath)
+        self.dashboard.append_log(f"[Capture] Template saved on disk: {filepath}")
         _, _, _, win_w, win_h = self.capture_engine.get_active_window_rect()
 
         dialog = SaveTargetDialog(self.dashboard, rules_snapshot=rules_snapshot, template_path=filepath)
@@ -255,10 +261,11 @@ class ApplicationCoordinator(QObject):
             )
             with self.lock:
                 self.rules.append(new_rule)
+            print(f"[RuleController] Creating AutomationRule: '{name}'")
             self.save_rules_to_json()
             self.rule_controller.refresh_rules_table()
             self.dashboard.template_manager.refresh_templates()
-            self.dashboard.append_log(f"[✓] Saved target rule: '{name}' template saved to {filepath}")
+            self.dashboard.append_log(f"[✓] [RuleManager] Saved target rule: '{name}' template saved to {filepath}")
 
     @Slot()
     def trigger_stress_test(self):
@@ -302,7 +309,7 @@ class ApplicationCoordinator(QObject):
         self.click_engine.release_all_buttons()
         self.debug_overlay.hide_overlay()
         self.highlight_overlay.clear_highlights()
-        self.dashboard.append_log("[🚨] EMERGENCY PANIC STOP ENGAGED. Clicks released, overlays destroyed under 100ms.")
+        self.dashboard.append_log("[🚨] [Recovery] EMERGENCY PANIC STOP ENGAGED. Clicks released, overlays destroyed under 100ms.")
 
 
 if __name__ == "__main__":

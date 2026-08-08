@@ -49,6 +49,7 @@ class RuleController(QObject):
             def make_active_updater(target_rule):
                 def updater(state):
                     target_rule.active = (state == Qt.Checked)
+                    print(f"[RuleController] Updating Rule active status: {target_rule.name} -> {target_rule.active}")
                     if self.save_rules_cb:
                         self.save_rules_cb()
                     self.refresh_rules_table()
@@ -84,6 +85,8 @@ class RuleController(QObject):
             del_btn.clicked.connect(make_rule_deleter(rule.id_str))
             self.dashboard.rules_table.setCellWidget(row, 8, del_btn)
 
+        print("[Dashboard] Rules table refreshed.")
+
     def delete_rule(self, rule_id: str):
         with self.lock:
             rule_to_remove = None
@@ -98,7 +101,7 @@ class RuleController(QObject):
                         os.remove(rule_to_remove.template_path)
                 except Exception:
                     pass
-                self.dashboard.append_log(f"[-] Deleted rule: '{rule_to_remove.name}'")
+                self.dashboard.append_log(f"[-] [RuleController] Deleted rule: '{rule_to_remove.name}'")
         if self.save_rules_cb:
             self.save_rules_cb()
         self.refresh_rules_table()
@@ -115,7 +118,7 @@ class RuleController(QObject):
                         target_rule = rule
                         break
             if target_rule:
-                self.dashboard.append_log(f"[*] Re-triggering Teach Mode to replace asset for rule '{target_rule.name}'...")
+                self.dashboard.append_log(f"[*] [RuleController] Re-triggering Teach Mode to replace asset for rule '{target_rule.name}'...")
                 self.replacing_rule_id = target_rule.id_str
                 trigger_teach_cb()
             else:

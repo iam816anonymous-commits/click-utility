@@ -5,8 +5,21 @@ from PIL import Image
 class CaptureEngine:
     """
     High-performance screen, region, and window capturing utility powered by MSS.
+    Singleton Pattern: guarantees only one instance resides in memory.
     """
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
     def __init__(self):
+        # Prevent re-initialization if already instantiated
+        if hasattr(self, "_initialized"):
+            return
+        self._initialized = True
         self.sct = mss.mss()
 
     def capture_full_screen(self) -> np.ndarray:
@@ -49,7 +62,6 @@ class CaptureEngine:
             if active:
                 title = active.title if active.title else "Untitled Window"
                 return title, int(active.left), int(active.top), int(active.width), int(active.height)
-        except Exception as e:
-            # Headless/Linux test fallback
+        except Exception:
             pass
         return "Headless Active Window", 100, 100, 1024, 768

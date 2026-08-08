@@ -36,7 +36,7 @@ class MonitoringWorker(QThread):
 
     def run(self):
         self.running = True
-        self.log_signal.emit("[*] Background screen capture loop activated.")
+        self.log_signal.emit("[Worker] Background screen capture loop activated.")
 
         while self.running:
             try:
@@ -141,6 +141,7 @@ class MonitoringWorker(QThread):
 
                     global_cx, global_cy, match_conf, tw, th = candidates[0]
                     t_detect_end = time.time()
+                    self.log_signal.emit(f"[Detection] Verified candidate for rule '{rule.name}' with {match_conf*100:.1f}% confidence.")
 
                     # Stage 3: Coordinate Calculation
                     t_coord_start = time.time()
@@ -180,7 +181,7 @@ class MonitoringWorker(QThread):
                     t_val_end = time.time()
 
                     if not valid:
-                        self.log_signal.emit(f"[🚨] Coordinate Validation Failed for '{rule.name}': {', '.join(reasons)}")
+                        self.log_signal.emit(f"[🚨] [Validation] Coordinate Validation Failed for '{rule.name}': {', '.join(reasons)}")
                         with self.lock:
                             rule.failures_count += 1
                         continue
@@ -225,7 +226,7 @@ class MonitoringWorker(QThread):
                         step_delay = step["delay"]
                         step_action = step["action"]
 
-                        self.log_signal.emit(f"-> Clicking step #{i+1}: '{step_action}' at [{step_x}, {step_y}]")
+                        self.log_signal.emit(f"-> [Execution] Clicking step #{i+1}: '{step_action}' at [{step_x}, {step_y}]")
                         click_ok = self.click_engine.trigger_click(step_x, step_y, step_action)
                         if click_ok:
                             with self.lock:
@@ -246,7 +247,7 @@ class MonitoringWorker(QThread):
                     if snippet_before.shape == snippet_after.shape:
                         diff = cv2.absdiff(snippet_before, snippet_after)
                         if np.mean(diff) < 2.0: # UI completely unchanged
-                            self.log_signal.emit("[⚠️] Click ineffective. Retrying once...")
+                            self.log_signal.emit("[Verification] Warning: click ineffective. Retrying once...")
                             click_ok = self.click_engine.trigger_click(logical_click_x, logical_click_y, "Left Click")
                             time.sleep(0.3)
 
@@ -256,7 +257,7 @@ class MonitoringWorker(QThread):
                                 20, 20
                             )
                             if np.mean(cv2.absdiff(snippet_before, snippet_after_retry)) < 2.0:
-                                self.log_signal.emit("[🚨] Click ineffective after retry. Target UI unchanged.")
+                                self.log_signal.emit("[🚨] [Verification] Click ineffective after retry. Target UI unchanged.")
                                 post_verify_passed = False
                                 with self.lock:
                                     rule.failures_count += 1

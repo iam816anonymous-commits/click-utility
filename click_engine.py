@@ -11,17 +11,31 @@ pyautogui.FAILSAFE = True  # Move mouse to corner to abort
 class ClickEngine(QObject):
     """
     Stage 7 - Re-written Smart Click Engine.
+    Singleton Pattern: guarantees only one instance resides in memory.
     Handles precise mouse movement verification, retries, click dispatch,
     and global hotkeys triggers with fast Esc-driven emergency recovery.
     """
+    _instance = None
+
+    # Custom signals must be class attributes in PySide6
     start_signal = Signal()
     stop_signal = Signal()
     teach_signal = Signal()
     teach_cursor_signal = Signal()
     emergency_signal = Signal()
 
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
     def __init__(self):
+        # Prevent re-initialization if already instantiated
+        if hasattr(self, "_initialized"):
+            return
         super().__init__()
+        self._initialized = True
         self.listener: Optional[keyboard.Listener] = None
 
     def safe_move_to(self, x: int, y: int, max_retries: int = 3) -> bool:
