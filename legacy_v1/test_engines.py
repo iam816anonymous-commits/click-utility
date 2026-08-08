@@ -1,5 +1,8 @@
 import os
 import sys
+# Guarantee backwards-compatibility import paths for archived legacy files
+sys.path.append(os.path.dirname(__file__))
+
 from unittest.mock import MagicMock
 
 # Mock sys.modules for GUI/X11 modules during unit testing to prevent connection errors

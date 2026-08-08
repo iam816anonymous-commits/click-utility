@@ -1,5 +1,8 @@
-import sys
 import os
+import sys
+# Guarantee backwards-compatibility import paths for archived legacy files
+sys.path.append(os.path.dirname(__file__))
+
 import cv2
 import json
 import numpy as np
