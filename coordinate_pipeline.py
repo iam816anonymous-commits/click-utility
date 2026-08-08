@@ -70,6 +70,7 @@ class SystemDpiCalibrator:
 class CoordinateCalculationResult:
     """
     Stage 3 - Immutable Coordinate Handling representation.
+    Separate and distinct physical vs logical representation to prevent high DPI drift.
     """
     def __init__(
         self,
@@ -82,8 +83,8 @@ class CoordinateCalculationResult:
         calculated_click_x: int,
         calculated_click_y: int,
         dpi_scale: float,
-        physical_click_x: int,
-        physical_click_y: int
+        logical_click_x: int,
+        logical_click_y: int
     ):
         self.top_left_x = top_left_x
         self.top_left_y = top_left_y
@@ -91,11 +92,11 @@ class CoordinateCalculationResult:
         self.template_h = template_h
         self.click_offset_x = click_offset_x
         self.click_offset_y = click_offset_y
-        self.calculated_click_x = calculated_click_x
-        self.calculated_click_y = calculated_click_y
+        self.calculated_click_x = calculated_click_x # Physical match center + relative offsets
+        self.calculated_click_y = calculated_click_y # Physical match center + relative offsets
         self.dpi_scale = dpi_scale
-        self.physical_click_x = physical_click_x
-        self.physical_click_y = physical_click_y
+        self.logical_click_x = logical_click_x # Logical click (PyAutoGUI Ready, divided by current_dpi)
+        self.logical_click_y = logical_click_y # Logical click (PyAutoGUI Ready, divided by current_dpi)
 
 
 class CoordinateValidator:
@@ -111,7 +112,7 @@ class CoordinateValidator:
     ) -> Tuple[bool, list[str]]:
         reasons = []
 
-        # 1. Click point inside template bounds
+        # 1. Click point inside template physical bounds
         in_temp_x = (coord_result.calculated_click_x >= coord_result.top_left_x) and \
                     (coord_result.calculated_click_x <= coord_result.top_left_x + coord_result.template_w)
         in_temp_y = (coord_result.calculated_click_y >= coord_result.top_left_y) and \
@@ -120,11 +121,11 @@ class CoordinateValidator:
         if not (in_temp_x and in_temp_y):
             reasons.append(
                 f"Click point ({coord_result.calculated_click_x}, {coord_result.calculated_click_y}) "
-                f"falls outside template bounds starting at ({coord_result.top_left_x}, {coord_result.top_left_y}) "
+                f"falls outside template physical bounds starting at ({coord_result.top_left_x}, {coord_result.top_left_y}) "
                 f"with size {coord_result.template_w}x{coord_result.template_h}."
             )
 
-        # 2. Click point inside window bounds (if window_rect is provided)
+        # 2. Click point inside window physical bounds (if window_rect is provided)
         if window_rect:
             wx, wy, ww, wh = window_rect
             in_win_x = (coord_result.calculated_click_x >= wx) and (coord_result.calculated_click_x <= wx + ww)
@@ -136,12 +137,12 @@ class CoordinateValidator:
                     f"Y: {coord_result.calculated_click_y} (Win: {wy} to {wy+wh})."
                 )
 
-        # 3. Click point lies inside screen bounds
-        in_screen_x = (coord_result.physical_click_x >= 0) and (coord_result.physical_click_x < screen_w)
-        in_screen_y = (coord_result.physical_click_y >= 0) and (coord_result.physical_click_y < screen_h)
+        # 3. Click point lies inside physical screen bounds
+        in_screen_x = (coord_result.calculated_click_x >= 0) and (coord_result.calculated_click_x < screen_w)
+        in_screen_y = (coord_result.calculated_click_y >= 0) and (coord_result.calculated_click_y < screen_h)
         if not (in_screen_x and in_screen_y):
             reasons.append(
-                f"Physical click ({coord_result.physical_click_x}, {coord_result.physical_click_y}) "
+                f"Physical click ({coord_result.calculated_click_x}, {coord_result.calculated_click_y}) "
                 f"exceeds physical screen dimensions of {screen_w}x{screen_h}."
             )
 
