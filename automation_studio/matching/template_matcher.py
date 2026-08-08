@@ -1,12 +1,49 @@
+import os
 import cv2
 import numpy as np
-from typing import Tuple, Optional, List
+import threading
+from typing import Tuple, Optional, List, Dict
 
 class MatchEngine:
     """
     Template Matching engine powered by OpenCV (Sum of Squared Differences / Normalized Cross-Correlation)
     and stubs for OCR and pixel-color matching.
+    Includes thread-safe template caching to avoid expensive disk I/O.
     """
+    _template_cache: Dict[str, Tuple[float, np.ndarray]] = {}
+    _cache_lock = threading.Lock()
+
+    @classmethod
+    def load_template(cls, template_path: str) -> Optional[np.ndarray]:
+        """
+        Loads and caches template_bgr image based on template_path.
+        Checks file modification time (mtime) to invalidate the cache if the file changes.
+        """
+        if not template_path:
+            return None
+
+        try:
+            mtime = os.path.getmtime(template_path)
+        except OSError:
+            # File doesn't exist or is inaccessible
+            with cls._cache_lock:
+                cls._template_cache.pop(template_path, None)
+            return None
+
+        with cls._cache_lock:
+            cached = cls._template_cache.get(template_path)
+            if cached is not None:
+                cached_mtime, cached_img = cached
+                if cached_mtime == mtime:
+                    return cached_img
+
+            # Load image from disk
+            img = cv2.imread(template_path, cv2.IMREAD_COLOR)
+            if img is not None:
+                cls._template_cache[template_path] = (mtime, img)
+            else:
+                cls._template_cache.pop(template_path, None)
+            return img
 
     @staticmethod
     def match_template(

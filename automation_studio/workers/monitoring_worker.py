@@ -100,9 +100,7 @@ class MonitoringWorker(QThread):
                     candidates = []
 
                     if rule.trigger_type == "Image Template Match":
-                        if not os.path.exists(rule.template_path):
-                            continue
-                        template = cv2.imread(rule.template_path, cv2.IMREAD_COLOR)
+                        template = MatchEngine.load_template(rule.template_path)
                         if template is None:
                             continue
 

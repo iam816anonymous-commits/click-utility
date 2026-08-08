@@ -35,8 +35,8 @@ class StressTestWorker(QThread):
             found = False
             match_coords = (0, 0)
 
-            if self.target_rule.trigger_type == "Image Template Match" and os.path.exists(self.target_rule.template_path):
-                template = cv2.imread(self.target_rule.template_path, cv2.IMREAD_COLOR)
+            if self.target_rule.trigger_type == "Image Template Match":
+                template = MatchEngine.load_template(self.target_rule.template_path)
                 if template is not None:
                     raw_matches = MatchEngine.match_template_multi(screen, template, threshold=self.target_rule.threshold, use_edges=self.target_rule.use_edges)
                     if raw_matches:
