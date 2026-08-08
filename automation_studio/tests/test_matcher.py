@@ -72,3 +72,18 @@ class TestMatchEngine(unittest.TestCase):
         self.assertIsNotNone(best_candidate)
         self.assertEqual(best_candidate[0], 25)
         self.assertEqual(best_candidate[1], 25)
+
+    def test_is_safe_path(self):
+        # 1. Valid paths inside base_dir should return True
+        self.assertTrue(MatchEngine.is_safe_path("targets/rule_1.png", base_dir="targets"))
+        self.assertTrue(MatchEngine.is_safe_path("targets/nested/rule_1.png", base_dir="targets"))
+
+        # 2. Backtracking or external paths should return False (Path Traversal attempt)
+        self.assertFalse(MatchEngine.is_safe_path("targets/../etc/passwd", base_dir="targets"))
+        self.assertFalse(MatchEngine.is_safe_path("targets_evil/rule_1.png", base_dir="targets"))
+        self.assertFalse(MatchEngine.is_safe_path("/etc/passwd", base_dir="targets"))
+        self.assertFalse(MatchEngine.is_safe_path("rules.json", base_dir="targets"))
+
+        # 3. Empty or None paths should return False
+        self.assertFalse(MatchEngine.is_safe_path("", base_dir="targets"))
+        self.assertFalse(MatchEngine.is_safe_path(None, base_dir="targets"))

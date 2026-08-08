@@ -1,3 +1,4 @@
+import os
 import cv2
 import numpy as np
 from typing import Tuple, Optional, List
@@ -7,6 +8,24 @@ class MatchEngine:
     Template Matching engine powered by OpenCV (Sum of Squared Differences / Normalized Cross-Correlation)
     and stubs for OCR and pixel-color matching.
     """
+
+    @staticmethod
+    def is_safe_path(path_str: str, base_dir: str = "targets") -> bool:
+        """
+        [SECURITY ENHANCEMENT] Prevents Path Traversal vulnerabilities.
+        Validates if a given path is secure and strictly within the specified base directory.
+        Protects against arbitrary file read, write, or deletion.
+        """
+        if not path_str:
+            return False
+        try:
+            # Resolve canonical absolute paths to eliminate backtracking sequences (e.g. '../')
+            abs_base = os.path.abspath(base_dir)
+            abs_path = os.path.abspath(path_str)
+            # Ensure the resolved path resides strictly within the base folder using commonpath
+            return os.path.commonpath([abs_base]) == os.path.commonpath([abs_base, abs_path])
+        except Exception:
+            return False
 
     @staticmethod
     def match_template(
