@@ -1,7 +1,9 @@
 import os
 import sys
 # Guarantee backwards-compatibility import paths for archived legacy files
-sys.path.append(os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(__file__))
+if 'main' in sys.modules:
+    del sys.modules['main']
 
 from unittest.mock import MagicMock
 
@@ -58,7 +60,7 @@ class TestMatchEngine(unittest.TestCase):
 
     def test_macro_rule_multi_step_sequence(self):
         # Import MacroRule model
-        from main import MacroRule
+        from models.automation_rule import MacroRule
 
         # Configure a custom multi-step click sequence
         custom_steps = [
@@ -97,7 +99,7 @@ class TestMatchEngine(unittest.TestCase):
 
     def test_absolute_cursor_position_rule(self):
         # Import MacroRule model
-        from main import MacroRule
+        from models.automation_rule import MacroRule
 
         rule = MacroRule(
             id_str="rule_abs_test",
@@ -120,7 +122,7 @@ class TestMatchEngine(unittest.TestCase):
 
     def test_window_relative_position_rule(self):
         # Import MacroRule model
-        from main import MacroRule
+        from models.automation_rule import MacroRule
 
         rule = MacroRule(
             id_str="rule_win_test",
@@ -152,7 +154,7 @@ class TestMatchEngine(unittest.TestCase):
 
     def test_coordinate_history_tracking(self):
         # Import MacroRule model
-        from main import MacroRule
+        from models.automation_rule import MacroRule
 
         rule = MacroRule(
             id_str="rule_hist_test",
@@ -276,7 +278,7 @@ class TestMatchEngine(unittest.TestCase):
         self.assertEqual(matches[1][1], 65)
 
     def test_macro_rule_region_locking_and_anchor_init(self):
-        from main import MacroRule
+        from models.automation_rule import MacroRule
         rule = MacroRule(
             id_str="rule_region_anchor",
             name="Test Rule with Region & Anchor",
@@ -297,7 +299,7 @@ class TestMatchEngine(unittest.TestCase):
         self.assertEqual(rule.train_h, 50)
 
     def test_rule_statistics_tracking(self):
-        from main import MacroRule
+        from models.automation_rule import MacroRule
         rule = MacroRule(
             id_str="stats_test_rule",
             name="Stats Track Rule",
