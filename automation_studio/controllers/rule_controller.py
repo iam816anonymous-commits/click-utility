@@ -97,8 +97,13 @@ class RuleController(QObject):
             if rule_to_remove:
                 self.rules.remove(rule_to_remove)
                 try:
-                    if os.path.exists(rule_to_remove.template_path):
-                        os.remove(rule_to_remove.template_path)
+                    if rule_to_remove.template_path:
+                        from automation_studio.matching.template_matcher import MatchEngine
+                        if MatchEngine.is_safe_path(rule_to_remove.template_path):
+                            if os.path.exists(rule_to_remove.template_path):
+                                os.remove(rule_to_remove.template_path)
+                        else:
+                            print(f"[SECURITY WARNING] Blocked deletion of untrusted template path: {rule_to_remove.template_path}")
                 except Exception:
                     pass
                 self.dashboard.append_log(f"[-] [RuleController] Deleted rule: '{rule_to_remove.name}'")
