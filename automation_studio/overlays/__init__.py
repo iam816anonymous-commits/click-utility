@@ -1,0 +1,3 @@
+from automation_studio.overlays.teach_overlay import TeachOverlay
+from automation_studio.overlays.region_selector import CoordinateCaptureOverlay
+from automation_studio.overlays.debug_overlay import DebugOverlay, MatchHighlightOverlay

@@ -6,8 +6,7 @@ import time
 from PySide6.QtCore import QObject, Slot, Qt
 from PySide6.QtWidgets import QApplication, QDialog
 
-from automation_studio.capture.capture_engine import CaptureEngine
-from automation_studio.mouse.click_engine import ClickEngine
+from automation_studio.app.dependency_container import DependencyContainer
 from automation_studio.models.automation_rule import MacroRule
 from automation_studio.workers.monitoring_worker import MonitoringWorker
 from automation_studio.controllers.rule_controller import RuleController
@@ -16,14 +15,21 @@ from automation_studio.ui import NativeDashboard, SaveTargetDialog, DebugOverlay
 class ApplicationCoordinator(QObject):
     """
     Application Coordinator & Bootstrapper.
-    Provides local JSON rule persistence and signals routing.
+    Resolves core dependencies from the DependencyContainer.
     """
     def __init__(self, app_instance):
         super().__init__()
         print("[Startup] [UI] Initializing Calibrated Automation Studio Services...")
         self.app = app_instance
-        self.capture_engine = CaptureEngine.get_instance()
-        self.rules: list[MacroRule] = []
+
+        # Resolve from Centralized DI Container
+        container = DependencyContainer.get_instance()
+        self.capture_engine = container.resolve("CaptureEngine")
+        self.click_engine = container.resolve("ClickEngine")
+        self.rule_manager = container.resolve("RuleManager")
+
+        # Share synchronized rules lists
+        self.rules = self.rule_manager.rules
         self.lock = threading.Lock()
 
         os.makedirs("targets", exist_ok=True)
@@ -33,18 +39,14 @@ class ApplicationCoordinator(QObject):
         self.highlight_overlay = MatchHighlightOverlay()
         self.debug_overlay = DebugOverlay()
 
-        self.click_engine = ClickEngine.get_instance()
         self.monitor_thread = MonitoringWorker(self.capture_engine, self.rules, self.click_engine, self.lock)
 
         # Instantiate Rule Controller passing rule persistence trigger
         self.rule_controller = RuleController(
-            self.dashboard, self.rules, self.lock, self.click_engine, self.capture_engine, self.save_rules_to_json
+            self.dashboard, self.rules, self.lock, self.click_engine, self.capture_engine, self.save_rules_to_db
         )
 
         self.connect_signals()
-
-        # Load rules from JSON
-        self.load_rules_from_json()
         print("[Startup] [UI] Initialization Sequence Complete. Application Ready.")
 
     def connect_signals(self):
@@ -83,65 +85,13 @@ class ApplicationCoordinator(QObject):
         self.click_engine.teach_cursor_signal.connect(self.trigger_teach_cursor)
         self.click_engine.emergency_signal.connect(self.emergency_abort)
 
-    def save_rules_to_json(self):
+    def save_rules_to_db(self):
         """
-        Rule Persistence - Writes all rules to rules.json.
+        Database persistence triggered on rule toggles/mutations.
         """
         with self.lock:
-            data = []
             for r in self.rules:
-                data.append({
-                    "id_str": r.id_str, "name": r.name, "trigger_type": r.trigger_type, "action": r.action,
-                    "cooldown": r.cooldown, "threshold": r.threshold, "template_path": r.template_path,
-                    "click_steps": r.click_steps, "abs_x": r.abs_x, "abs_y": r.abs_y, "window_title": r.window_title,
-                    "window_offset_x": r.window_offset_x, "window_offset_y": r.window_offset_y,
-                    "search_region": r.search_region, "anchor_rule_id": r.anchor_rule_id, "train_x": r.train_x,
-                    "train_y": r.train_y, "train_w": r.train_w, "train_h": r.train_h,
-                    "click_offset_x": r.click_offset_x, "click_offset_y": r.click_offset_y,
-                    "window_client_w": r.window_client_w, "window_client_h": r.window_client_h, "dpi_scale": r.dpi_scale,
-                    "calibration_correction_x": r.calibration_correction_x,
-                    "calibration_correction_y": r.calibration_correction_y, "active": r.active
-                })
-        try:
-            with open("rules.json", "w") as f:
-                json.dump(data, f, indent=4)
-            print("[Rule Persistence] [RuleManager] Successfully saved rules to rules.json")
-        except Exception as e:
-            print(f"[Rule Persistence] [RuleManager] Error saving rules: {e}")
-
-    def load_rules_from_json(self):
-        """
-        Rule Persistence - Loads rules from rules.json on startup.
-        """
-        if not os.path.exists("rules.json"):
-            return
-        try:
-            with open("rules.json", "r") as f:
-                data = json.load(f)
-            new_rules = []
-            for d in data:
-                rule = MacroRule(
-                    id_str=d["id_str"], name=d["name"], trigger_type=d["trigger_type"], action=d["action"],
-                    cooldown=d["cooldown"], threshold=d["threshold"], template_path=d["template_path"],
-                    click_steps=d.get("click_steps"), abs_x=d.get("abs_x"), abs_y=d.get("abs_y"),
-                    window_title=d.get("window_title"), window_offset_x=d.get("window_offset_x"), window_offset_y=d.get("window_offset_y"),
-                    search_region=d.get("search_region", "Entire Screen"), anchor_rule_id=d.get("anchor_rule_id"),
-                    train_x=d.get("train_x"), train_y=d.get("train_y"), train_w=d.get("train_w"), train_h=d.get("train_h"),
-                    click_offset_x=d.get("click_offset_x"), click_offset_y=d.get("click_offset_y"),
-                    window_client_w=d.get("window_client_w"), window_client_h=d.get("window_client_h"), dpi_scale=d.get("dpi_scale", 1.0),
-                    calibration_correction_x=d.get("calibration_correction_x", 0.0),
-                    calibration_correction_y=d.get("calibration_correction_y", 0.0)
-                )
-                rule.active = d.get("active", True)
-                new_rules.append(rule)
-            with self.lock:
-                self.rules.clear()
-                self.rules.extend(new_rules)
-            self.rule_controller.refresh_rules_table()
-            self.dashboard.template_manager.refresh_templates()
-            print(f"[Rule Persistence] [RuleManager] Successfully loaded {len(new_rules)} rules from rules.json")
-        except Exception as e:
-            print(f"[Rule Persistence] [RuleManager] Error loading rules: {e}")
+                self.rule_manager.add_rule(r)
 
     def launch_calibration_wizard(self):
         from automation_studio.ui.calibration_dialog import CalibrationWizard
@@ -155,7 +105,7 @@ class ApplicationCoordinator(QObject):
             for rule in self.rules:
                 rule.calibration_correction_x = correction_x
                 rule.calibration_correction_y = correction_y
-        self.save_rules_to_json()
+        self.save_rules_to_db()
         self.dashboard.append_log(f"[⚙️] [RuleController] Calibration factors configured: X: {correction_x}x, Y: {correction_y}x")
 
     @Slot()
@@ -203,10 +153,7 @@ class ApplicationCoordinator(QObject):
                 window_title=dialog.window_title, window_offset_x=dialog.window_offset_x, window_offset_y=dialog.window_offset_y,
                 search_region=dialog.region_combo.currentText(), anchor_rule_id=anchor_rule_id, window_client_w=win_w, window_client_h=win_h
             )
-            with self.lock:
-                self.rules.append(new_rule)
-            print(f"[RuleController] Creating AutomationRule: '{name}'")
-            self.save_rules_to_json()
+            self.rule_manager.add_rule(new_rule)
             self.rule_controller.refresh_rules_table()
             self.dashboard.append_log(f"[✓] [RuleManager] Saved new rule: '{name}'")
 
@@ -226,7 +173,7 @@ class ApplicationCoordinator(QObject):
                         self.dashboard.append_log(f"[✓] [Capture] Successfully replaced template for rule '{rule.name}'!")
                         break
             self.rule_controller.replacing_rule_id = None
-            self.save_rules_to_json()
+            self.save_rules_to_db()
             self.rule_controller.refresh_rules_table()
             self.dashboard.template_manager.refresh_templates()
             return
@@ -256,10 +203,7 @@ class ApplicationCoordinator(QObject):
                 search_region=dialog.region_combo.currentText(), anchor_rule_id=anchor_rule_id, train_x=x, train_y=y, train_w=w, train_h=h,
                 click_offset_x=dialog.click_offset_x, click_offset_y=dialog.click_offset_y, window_client_w=win_w, window_client_h=win_h
             )
-            with self.lock:
-                self.rules.append(new_rule)
-            print(f"[RuleController] Creating AutomationRule: '{name}'")
-            self.save_rules_to_json()
+            self.rule_manager.add_rule(new_rule)
             self.rule_controller.refresh_rules_table()
             self.dashboard.template_manager.refresh_templates()
             self.dashboard.append_log(f"[✓] [RuleManager] Saved target rule: '{name}' template saved to {filepath}")
@@ -301,7 +245,6 @@ class ApplicationCoordinator(QObject):
 
     @Slot()
     def emergency_abort(self):
-        # Stage 10: Emergency Stop - Release buttons, stop monitoring, hide overlays
         self.stop_monitoring()
         self.click_engine.release_all_buttons()
         self.debug_overlay.hide_overlay()

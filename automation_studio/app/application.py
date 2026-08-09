@@ -1,11 +1,14 @@
 import sys
 from PySide6.QtWidgets import QApplication
+
+from automation_studio.app.dependency_container import DependencyContainer
 from automation_studio.app.startup import run_startup_sequence
 from automation_studio.app.shutdown import run_shutdown_sequence
 
 class AutomationStudioApplication:
     """
     Manages the lifecycle of the Calibrated Desktop Automation Studio application.
+    Resolves registered dependencies from the DependencyContainer.
     """
     def __init__(self, argv: list):
         self.app = QApplication(argv)
@@ -14,7 +17,17 @@ class AutomationStudioApplication:
 
     def start(self) -> int:
         self.running = True
+
+        # Run startup sequence to initialize and register singletons in DI container
         run_startup_sequence()
+
+        # Resolve core dependencies
+        container = DependencyContainer.get_instance()
+        self.db_manager = container.resolve("Database")
+        self.capture_engine = container.resolve("CaptureEngine")
+        self.click_engine = container.resolve("ClickEngine")
+        self.coordinate_manager = container.resolve("CoordinateManager")
+        self.rule_manager = container.resolve("RuleManager")
 
         # Load Application Coordinator and show main GUI dashboard
         from automation_studio.controllers.application_controller import ApplicationCoordinator
@@ -24,7 +37,6 @@ class AutomationStudioApplication:
 
         print("[Lifecycle] Launching application main window...")
 
-        # Run event loop
         exit_code = self.app.exec()
 
         self.stop()
