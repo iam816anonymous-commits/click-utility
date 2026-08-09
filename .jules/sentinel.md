@@ -1,4 +1,0 @@
-## 2025-02-18 - Path Traversal / Arbitrary File Deletion in Template File Management
-**Vulnerability:** User-defined or deserialized JSON rule structures (`rules.json` or `template_path` database attributes) containing backtracking path traversals (e.g., `../../file`) allowed arbitrary system files to be read via `cv2.imread` or deleted via `os.remove` during rule deletion execution.
-**Learning:** File path parameters should never be trusted blindly or concatenated/checked directly with simple text patterns (like `startswith`). String prefix matching can be bypassed, and un-canonicalized paths remain vulnerable to directory backtracking.
-**Prevention:** Always resolve the absolute canonical form of paths (`os.path.abspath`) and verify boundaries using `os.path.commonpath([allowed_dir]) == os.path.commonpath([allowed_dir, target_path])` before conducting any filesystem read, write, or delete actions.

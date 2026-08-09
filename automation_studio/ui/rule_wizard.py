@@ -522,12 +522,6 @@ class RuleWizard(QDialog):
             self.steps_table.setItem(row, 3, QTableWidgetItem(f"{step['delay']}s"))
 
             del_btn = QPushButton("🗑️")
-            del_btn.setToolTip(f"Delete click step #{row+1}")
-            del_btn.setAccessibleName(f"Delete click step {row+1}")
-            del_btn.setStyleSheet(
-                "QPushButton { background-color: transparent; border: none; font-size: 14px; padding: 2px; }"
-                "QPushButton:hover { background-color: #EF4444; border-radius: 4px; }"
-            )
             def make_deleter(index):
                 return lambda: self.delete_click_step(index)
             del_btn.clicked.connect(make_deleter(row))
